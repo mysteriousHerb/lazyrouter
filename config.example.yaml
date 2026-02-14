@@ -1,0 +1,113 @@
+# ============================================================
+# LazyRouter Example Configuration (mainstream providers + ELO)
+# ============================================================
+
+serve:
+  host: "0.0.0.0"
+  port: 1234
+  show_model_prefix: true
+  debug: false
+  capture_requests: false
+  # api_key: "set-an-internal-key-if-you-want-to-protect-the-router"
+
+# Providers map names -> credentials/endpoints.
+# API keys are pulled from `.env` via ${...} substitution.
+providers:
+  openai:
+    api_key: "${OPENAI_API_KEY}"
+    api_style: openai
+
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+    base_url: "https://api.anthropic.com"
+    api_style: anthropic
+
+  gemini:
+    api_key: "${GOOGLE_API_KEY}"
+    api_style: gemini
+
+  openrouter:
+    api_key: "${OPENROUTER_API_KEY}"
+    base_url: "https://openrouter.ai/api"
+    api_style: openai-completions
+
+# Router LLM decides which model to use.
+router:
+  provider: gemini
+  model: "gemini-2.5-flash"
+  input_price: 0.5
+  output_price: 3.0
+  context_messages: 10
+
+# Models that can be selected at runtime.
+# ELO source suggestion: https://arena.ai/leaderboard
+# - coding_elo: relative coding quality signal (higher is generally better)
+# - writing_elo: relative writing quality signal (higher is generally better)
+# ELO is optional for runtime, but useful for consistent routing preferences.
+llms:
+  gemini-2.5-flash:
+    description: "Very fast, cheap, and capable for most conversations and tool calling."
+    provider: gemini
+    model: "gemini-2.5-flash"
+    input_price: 0.5
+    output_price: 3.0
+    coding_elo: 1443
+    writing_elo: 1472
+
+  gemini-2.5-pro:
+    description: "More capable Gemini model for complex reasoning and coding."
+    provider: gemini
+    model: "gemini-2.5-pro"
+    input_price: 2.0
+    output_price: 12.0
+    coding_elo: 1449
+    writing_elo: 1486
+
+  claude-sonnet-4-5:
+    description: "Balanced quality model for coding and writing."
+    provider: anthropic
+    model: "claude-3-5-sonnet-latest"
+    input_price: 3.0
+    output_price: 15.0
+    coding_elo: 1386
+    writing_elo: 1451
+
+  claude-opus-4-6:
+    description: "High-quality model for difficult tasks; use when quality matters most."
+    provider: anthropic
+    model: "claude-opus-4-6"
+    input_price: 5.0
+    output_price: 25.0
+    coding_elo: 1569
+    writing_elo: 1501
+
+  gpt-4o-mini:
+    description: "Fast and cost-effective OpenAI baseline."
+    provider: openai
+    model: "gpt-4o-mini"
+    input_price: 0.15
+    output_price: 0.60
+    coding_elo: 1300
+    writing_elo: 1400
+
+  openrouter-grok-4-fast:
+    description: "OpenRouter route for fast reasoning at moderate cost."
+    provider: openrouter
+    model: "x-ai/grok-4-fast-reasoning"
+    input_price: 0.8
+    output_price: 2.0
+    coding_elo: 1237
+    writing_elo: 1431
+
+context_compression:
+  history_trimming: true  # Master switch for deterministic history trimming.
+  max_history_tokens: 10000  # Hard token budget for message history (system prompt excluded).
+  keep_recent_exchanges: 8  # Preserve newest user-assistant exchanges uncompressed.
+  keep_recent_user_turns_in_chained_tool_calls: 1  # Keep this many recent user turns untouched during chained tool calls.
+  skip_router_on_tool_results: true  # Reuse previous selected model on tool-result follow-ups.
+
+health_check:
+  enabled: true
+  interval: 1800
+  max_latency_ms: 15000
+  fail_open_when_all_unhealthy: false

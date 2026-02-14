@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Read(./**)",
+      "Edit(./**)",
+      "Git",
+      "WebFetch(domain:github.com)"
+    ],
+    "defaultMode": "bypassPermissions"
+  },
+  "enabledPlugins": {
+    "planning-with-files": true
+  }
+}
