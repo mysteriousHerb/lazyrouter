@@ -198,17 +198,11 @@ class HealthChecker:
                 self.last_results[name] = result
                 logger.warning(f"Health check: {name} unhealthy — {err}")
 
-        # Edge case: if ALL models are unhealthy, either fail-open or keep none.
+        # If ALL models are unhealthy, log error and keep none available (strict mode)
         if not new_healthy:
-            if getattr(self.hc_config, "fail_open_when_all_unhealthy", False):
-                logger.warning(
-                    "Health check: ALL models unhealthy, fail-open enabled; keeping all available"
-                )
-                new_healthy = set(self.config.llms.keys())
-            else:
-                logger.error(
-                    "Health check: ALL models unhealthy, strict mode enabled; keeping none available"
-                )
+            logger.error(
+                "Health check: ALL models unhealthy; keeping none available"
+            )
 
         if new_healthy != self.healthy_models:
             added = new_healthy - self.healthy_models
@@ -242,9 +236,6 @@ class HealthChecker:
 
     def start(self):
         """Start the background health check loop."""
-        if not self.hc_config.enabled:
-            logger.info("Health checks disabled")
-            return
         logger.info(
             f"Starting health checks every {self.hc_config.interval}s "
             f"(max_latency={self.hc_config.max_latency_ms}ms)"

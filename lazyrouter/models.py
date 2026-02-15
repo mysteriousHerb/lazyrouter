@@ -125,7 +125,6 @@ class HealthCheckResponse(BaseModel):
 class HealthStatusResponse(BaseModel):
     """Current health checker status and latest results"""
 
-    enabled: bool
     interval: int
     max_latency_ms: int
     last_check: Optional[str] = None

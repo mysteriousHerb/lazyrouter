@@ -96,12 +96,8 @@ class ContextCompressionConfig(BaseModel):
 class HealthCheckConfig(BaseModel):
     """Periodic health check settings"""
 
-    enabled: bool = False
     interval: int = 300  # seconds between checks
     max_latency_ms: int = 10000  # models slower than this are excluded
-    fail_open_when_all_unhealthy: bool = (
-        False  # if true, keep all models routable when all fail checks
-    )
 
 
 class Config(BaseModel):

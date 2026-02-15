@@ -162,21 +162,10 @@ class LLMRouter:
             if model_name not in excluded_models
         ]
         if not available_models:
-            fail_open = bool(
-                getattr(
-                    getattr(self.config, "health_check", object()),
-                    "fail_open_when_all_unhealthy",
-                    False,
-                )
-            )
-            if excluded_models and not fail_open:
+            if excluded_models:
                 raise ValueError("No healthy models available for routing")
-            logger.warning(
-                "No healthy models available for routing, fail-open enabled; "
-                "falling back to all configured models"
-            )
-            available_models = list(self.config.llms.keys())
-            excluded_models = set()
+            # No models configured at all
+            raise ValueError("No models configured")
 
         # Extract current user request (most important for routing)
         current_request = self._extract_user_query(messages)

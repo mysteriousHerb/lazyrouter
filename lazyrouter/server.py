@@ -154,7 +154,6 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                 results.append(result)
 
         return HealthStatusResponse(
-            enabled=config.health_check.enabled,
             interval=config.health_check.interval,
             max_latency_ms=config.health_check.max_latency_ms,
             last_check=health_checker.last_check,
@@ -274,13 +273,13 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                 # Check for healthy models with backoff retry until next health check
                 async def wait_for_healthy_models():
                     """Wait for healthy models with backoff until next scheduled health check"""
-                    if not config.health_check.enabled or len(config.llms) == 0:
+                    if len(config.llms) == 0:
                         return True
                     if len(health_checker.healthy_models) > 0:
                         return True
 
-                    # Retry with backoff until next health check interval
-                    max_wait = config.health_check.interval
+                    # Retry with backoff, capped at 60s to avoid blocking requests too long
+                    max_wait = min(config.health_check.interval, 60)
                     total_waited = 0.0
                     delay = INITIAL_RETRY_DELAY
 
@@ -307,7 +306,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                     return False
 
                 has_healthy = await wait_for_healthy_models()
-                if not has_healthy and config.health_check.enabled and len(config.llms) > 0:
+                if not has_healthy and len(config.llms) > 0:
                     logger.warning(
                         "[health-check] no healthy models available after retries; rejecting auto request"
                     )
@@ -332,10 +331,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                         )
                     )
                     if pinned_model and pinned_model in config.llms:
-                        if (
-                            config.health_check.enabled
-                            and pinned_model in health_checker.unhealthy_models
-                        ):
+                        if pinned_model in health_checker.unhealthy_models:
                             logger.warning(
                                 "[router-skip] cached model unhealthy, rerouting: %s",
                                 pinned_model,
@@ -493,7 +489,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                 Returns tuple (response, model, config, api_style, messages, extra_kwargs) on success,
                 or None if all retries exhausted.
                 """
-                max_wait = config.health_check.interval if config.health_check.enabled else 60
+                max_wait = min(config.health_check.interval, 60)  # Cap at 60s
                 total_waited = 0.0
                 delay = INITIAL_RETRY_DELAY
 
@@ -508,12 +504,11 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                     total_waited += delay
 
                     # Re-run health check and reset tried models
-                    if config.health_check.enabled:
-                        await health_checker.run_check()
+                    await health_checker.run_check()
                     tried_models.clear()
 
                     # Rebuild fallback list with fresh health data
-                    healthy_set = health_checker.healthy_models if config.health_check.enabled else None
+                    healthy_set = health_checker.healthy_models
                     retry_models = [original_model] + select_fallback_models(
                         original_model,
                         config.llms,
@@ -566,7 +561,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
 
                 tried_models = set()
                 original_model = selected_model
-                healthy_set = health_checker.healthy_models if config.health_check.enabled else None
+                healthy_set = health_checker.healthy_models
 
                 # Build fallback list: original model + ELO-similar models
                 models_to_try = [selected_model] + select_fallback_models(
