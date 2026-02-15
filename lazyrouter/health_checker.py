@@ -11,7 +11,7 @@ import litellm
 
 from .config import Config
 from .litellm_utils import build_litellm_params
-from .models import BenchmarkResult
+from .models import HealthCheckResult
 
 logger = logging.getLogger(__name__)
 
@@ -80,10 +80,10 @@ class LiteLLMWrapper:
         yield "data: [DONE]\n\n"
 
 
-async def bench_one(
+async def check_model_health(
     name: str, provider, actual_model: str, provider_name: str, is_router: bool = False
-) -> BenchmarkResult:
-    """Benchmark a single model with one non-streaming request."""
+) -> HealthCheckResult:
+    """Check health of a single model with one non-streaming request."""
     ttft_ms = None
     total_ms = None
     try:
@@ -97,7 +97,7 @@ async def bench_one(
         )
         total_ms = round((time.monotonic() - t0) * 1000, 1)
 
-        return BenchmarkResult(
+        return HealthCheckResult(
             model=name,
             provider=provider_name,
             actual_model=actual_model,
@@ -107,7 +107,7 @@ async def bench_one(
             total_ms=total_ms,
         )
     except Exception as e:
-        return BenchmarkResult(
+        return HealthCheckResult(
             model=name,
             provider=provider_name,
             actual_model=actual_model,
@@ -120,7 +120,7 @@ async def bench_one(
 
 
 class HealthChecker:
-    """Runs periodic benchmarks and tracks which models are healthy."""
+    """Runs periodic health checks and tracks which models are available."""
 
     def __init__(self, config: Config):
         self.config = config
@@ -128,7 +128,7 @@ class HealthChecker:
         self.healthy_models: Set[str] = set(
             config.llms.keys()
         )  # assume all healthy at start
-        self.last_results: Dict[str, BenchmarkResult] = {}
+        self.last_results: Dict[str, HealthCheckResult] = {}
         self.last_check: Optional[str] = None
         self._task: Optional[asyncio.Task] = None
 
@@ -136,7 +136,7 @@ class HealthChecker:
     def unhealthy_models(self) -> Set[str]:
         return set(self.config.llms.keys()) - self.healthy_models
 
-    async def run_check(self) -> list[BenchmarkResult]:
+    async def run_check(self) -> list[HealthCheckResult]:
         """Run a single health check against all configured models."""
         tasks = []
         model_names = []
@@ -152,7 +152,7 @@ class HealthChecker:
             model_names.append(model_name)
             tasks.append(
                 asyncio.wait_for(
-                    bench_one(
+                    check_model_health(
                         model_name, provider, model_config.model, model_config.provider
                     ),
                     timeout=self.hc_config.max_latency_ms / 1000
@@ -166,7 +166,7 @@ class HealthChecker:
         new_healthy = set()
         for i, r in enumerate(raw_results):
             name = model_names[i]
-            if isinstance(r, BenchmarkResult):
+            if isinstance(r, HealthCheckResult):
                 results.append(r)
                 self.last_results[name] = r
                 if (
@@ -185,7 +185,7 @@ class HealthChecker:
             else:
                 err = "Timed out" if isinstance(r, asyncio.TimeoutError) else str(r)
                 mc = self.config.llms[name]
-                result = BenchmarkResult(
+                result = HealthCheckResult(
                     model=name,
                     provider=mc.provider,
                     actual_model=mc.model,

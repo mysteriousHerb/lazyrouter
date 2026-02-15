@@ -16,15 +16,15 @@ from .gemini_retries import (
     call_router_with_gemini_fallback,
     is_gemini_tool_type_proto_error,
 )
-from .health_checker import HealthChecker, bench_one
+from .health_checker import HealthChecker, check_model_health
 from .message_utils import (
     collect_trailing_tool_results,
     content_to_text,
     tool_call_name_by_id,
 )
 from .models import (
-    BenchmarkResponse,
-    BenchmarkResult,
+    HealthCheckResponse,
+    HealthCheckResult,
     ChatCompletionRequest,
     HealthResponse,
     HealthStatusResponse,
@@ -1018,9 +1018,9 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             logger.error(f"Error processing request: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
 
-    @app.get("/v1/benchmark", response_model=BenchmarkResponse)
-    async def benchmark(timeout: int = 30):
-        """Benchmark latency of all configured models and the router model."""
+    @app.get("/v1/health-check", response_model=HealthCheckResponse)
+    async def health_check_now(timeout: int = 30):
+        """Run health check on all models now and return results."""
         from .health_checker import LiteLLMWrapper
 
         # Build tasks for all configured models
@@ -1035,14 +1035,14 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             model_names.append(model_name)
             tasks.append(
                 asyncio.wait_for(
-                    bench_one(
+                    check_model_health(
                         model_name, provider, model_config.model, model_config.provider
                     ),
                     timeout=timeout,
                 )
             )
 
-        # Also benchmark the router model
+        # Also check the router model
         api_key = config.get_api_key(config.router.provider)
         base_url = config.get_base_url(config.router.provider)
         api_style = config.get_api_style(config.router.provider)
@@ -1059,7 +1059,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
         model_names.append("router")
         tasks.append(
             asyncio.wait_for(
-                bench_one(
+                check_model_health(
                     "router",
                     router_provider,
                     router_actual_model,
@@ -1075,7 +1075,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
 
         results = []
         for i, r in enumerate(raw_results):
-            if isinstance(r, BenchmarkResult):
+            if isinstance(r, HealthCheckResult):
                 results.append(r)
             else:
                 # Timeout or unexpected exception
@@ -1087,7 +1087,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                     else str(r)
                 )
                 results.append(
-                    BenchmarkResult(
+                    HealthCheckResult(
                         model=name,
                         provider=mc.provider if mc else config.router.provider,
                         actual_model=mc.model if mc else config.router.model,
@@ -1097,7 +1097,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                     )
                 )
 
-        return BenchmarkResponse(
+        return HealthCheckResponse(
             timestamp=datetime.now(timezone.utc).isoformat(),
             results=results,
         )

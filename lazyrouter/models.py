@@ -102,8 +102,8 @@ class HealthResponse(BaseModel):
     available_models: List[str]
 
 
-class BenchmarkResult(BaseModel):
-    """Single model benchmark result"""
+class HealthCheckResult(BaseModel):
+    """Single model health check result"""
 
     model: str
     provider: str
@@ -115,15 +115,15 @@ class BenchmarkResult(BaseModel):
     error: Optional[str] = None
 
 
-class BenchmarkResponse(BaseModel):
-    """Full benchmark response"""
+class HealthCheckResponse(BaseModel):
+    """Health check response for all models"""
 
     timestamp: str
-    results: List[BenchmarkResult]
+    results: List[HealthCheckResult]
 
 
 class HealthStatusResponse(BaseModel):
-    """Current health checker status and latest benchmark results"""
+    """Current health checker status and latest results"""
 
     enabled: bool
     interval: int
@@ -131,4 +131,4 @@ class HealthStatusResponse(BaseModel):
     last_check: Optional[str] = None
     healthy_models: List[str]
     unhealthy_models: List[str]
-    results: List[BenchmarkResult]
+    results: List[HealthCheckResult]
