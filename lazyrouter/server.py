@@ -67,8 +67,7 @@ health_checker: HealthChecker = None
 def _configure_logging(debug: bool) -> None:
     """Apply runtime log level from config."""
     level = logging.DEBUG if debug else logging.INFO
-    logging.getLogger().setLevel(level)
-    logger.setLevel(level)
+    logging.getLogger("lazyrouter").setLevel(level)
 
 
 def create_app(config_path: str = "config.yaml") -> FastAPI:
