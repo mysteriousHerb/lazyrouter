@@ -120,11 +120,17 @@ def _get_first_response_message(response: Dict[str, Any]) -> Dict[str, Any] | No
     return message
 
 
-def create_app(config_path: str = "config.yaml") -> FastAPI:
+def create_app(
+    config_path: str = "config.yaml",
+    env_file: str | None = None,
+    preloaded_config: Config | None = None,
+) -> FastAPI:
     """Create and configure FastAPI application
 
     Args:
         config_path: Path to configuration file
+        env_file: Optional path to dotenv file
+        preloaded_config: Preloaded config object to avoid re-parsing config
 
     Returns:
         Configured FastAPI app
@@ -132,12 +138,18 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
     global config, router, usage_logger, health_checker
 
     # Load configuration
-    try:
-        config = load_config(config_path)
-        logger.info(f"Loaded configuration from {config_path}")
-    except Exception as e:
-        logger.error(f"Failed to load configuration: {e}")
-        raise
+    if preloaded_config is not None:
+        # When config is already loaded by the caller (CLI non-reload path),
+        # env_file has already been applied during that initial load step.
+        config = preloaded_config
+        logger.info("Using preloaded configuration")
+    else:
+        try:
+            config = load_config(config_path, env_file=env_file)
+            logger.info(f"Loaded configuration from {config_path}")
+        except Exception as e:
+            logger.exception(f"Failed to load configuration: {e}")
+            raise
 
     # Initialize router
     try:

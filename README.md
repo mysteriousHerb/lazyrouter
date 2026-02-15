@@ -47,6 +47,12 @@ It also helps translate behavior across API styles (OpenAI, Gemini, and Anthropi
 uvx --from git+https://github.com/mysteriousHerb/lazyrouter.git lazyrouter --config config.yaml
 ```
 
+If you want to use a specific env file path, add:
+
+```bash
+uvx --from git+https://github.com/mysteriousHerb/lazyrouter.git lazyrouter --config config.yaml --env-file .env
+```
+
 ### Option 2: Clone and run locally
 
 1. Install `uv`: <https://docs.astral.sh/uv/getting-started/installation/>

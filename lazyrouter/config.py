@@ -2,10 +2,11 @@
 
 import os
 import re
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import yaml
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 from pydantic import BaseModel, model_validator
 
 
@@ -152,11 +153,14 @@ def substitute_env_vars(value: Any) -> Any:
         return value
 
 
-def load_config(config_path: str = "config.yaml") -> Config:
+def load_config(
+    config_path: str = "config.yaml", env_file: Optional[str] = None
+) -> Config:
     """Load and validate configuration from YAML file
 
     Args:
         config_path: Path to YAML configuration file
+        env_file: Optional path to dotenv file
 
     Returns:
         Validated Config object
@@ -165,8 +169,15 @@ def load_config(config_path: str = "config.yaml") -> Config:
         FileNotFoundError: If config file doesn't exist
         ValueError: If configuration is invalid
     """
-    # Load environment variables from .env file if it exists
-    load_dotenv()
+    # Load environment variables from env file (or default .env if present)
+    if env_file:
+        expanded_env_file = Path(env_file).expanduser()
+        if not expanded_env_file.exists():
+            raise FileNotFoundError(f"Environment file not found: {env_file}")
+        load_dotenv(dotenv_path=str(expanded_env_file))
+    else:
+        # Prefer searching from current working directory for uvx/local runs.
+        load_dotenv(dotenv_path=find_dotenv(usecwd=True))
 
     # Load YAML file
     if not os.path.exists(config_path):
