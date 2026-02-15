@@ -410,58 +410,6 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                 parts.append(f"why: {routing_reasoning[:80]}...")
             logger.info(f"[routing] {' | '.join(parts)}")
 
-            provider_api_style = config.get_api_style(model_config.provider).lower()
-            provider_messages = messages
-            if provider_api_style == "gemini":
-                thought_id_count = 0
-                for msg in messages:
-                    if msg.get("role") == "tool":
-                        if GEMINI_THOUGHT_ID_DELIMITER in str(
-                            msg.get("tool_call_id", "")
-                        ):
-                            thought_id_count += 1
-                    elif msg.get("role") == "assistant":
-                        for tc in msg.get("tool_calls", []) or []:
-                            if GEMINI_THOUGHT_ID_DELIMITER in str(
-                                (tc or {}).get("id", "")
-                            ):
-                                thought_id_count += 1
-                if thought_id_count:
-                    logger.debug(
-                        "[gemini-messages] stripped thought signatures from %s tool call ids",
-                        thought_id_count,
-                    )
-                provider_messages = sanitize_messages_for_gemini(messages)
-
-            # Build extra kwargs to pass through to provider
-            extra_kwargs = {}
-            if request.tools:
-                tools = request.tools
-
-                # Sanitize tools for provider-specific schemas.
-                if provider_api_style == "anthropic":
-                    extra_kwargs["tools"] = sanitize_tool_schema_for_anthropic(tools)
-                elif provider_api_style == "gemini":
-                    extra_kwargs["tools"] = sanitize_tool_schema_for_gemini(
-                        tools, output_format="openai"
-                    )
-                    first_tool = (
-                        extra_kwargs["tools"][0]
-                        if isinstance(extra_kwargs["tools"], list)
-                        and len(extra_kwargs["tools"]) > 0
-                        else None
-                    )
-                    if isinstance(first_tool, dict):
-                        logger.debug(
-                            "[gemini-tools] count=%s first_keys=%s first=%s",
-                            len(extra_kwargs["tools"]),
-                            list(first_tool.keys()),
-                            json.dumps(first_tool, ensure_ascii=False)[:280],
-                        )
-                else:
-                    extra_kwargs["tools"] = tools
-            if request.tool_choice is not None:
-                extra_kwargs["tool_choice"] = request.tool_choice
             # Resolve max_tokens: prefer explicit max_tokens, fall back to max_completion_tokens
             effective_max_tokens = request.max_tokens or request.max_completion_tokens
 
@@ -525,6 +473,88 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                     prep_extra["tool_choice"] = request.tool_choice
 
                 return prep_messages, prep_extra, api_style
+
+            # Initialize provider-specific state for the selected model
+            provider_messages, extra_kwargs, provider_api_style = prepare_for_model(selected_model)
+
+            # Helper for backoff retry loop (extracted to reduce nesting)
+            async def _backoff_retry_loop(
+                original_model,
+                tried_models,
+                prepare_for_model,
+                provider_kwargs,
+                is_tool_continuation_turn,
+                effective_max_tokens,
+            ):
+                """Retry with exponential backoff until next health check interval.
+
+                Returns tuple (response, model, config, api_style, messages, extra_kwargs) on success,
+                or None if all retries exhausted.
+                """
+                max_wait = config.health_check.interval if config.health_check.enabled else 60
+                total_waited = 0.0
+                delay = INITIAL_RETRY_DELAY
+
+                while total_waited < max_wait:
+                    logger.warning(
+                        "[backoff] all models failed, waiting %.1fs (%.0f/%.0fs)",
+                        delay,
+                        total_waited,
+                        max_wait,
+                    )
+                    await asyncio.sleep(delay)
+                    total_waited += delay
+
+                    # Re-run health check and reset tried models
+                    if config.health_check.enabled:
+                        await health_checker.run_check()
+                    tried_models.clear()
+
+                    # Rebuild fallback list with fresh health data
+                    healthy_set = health_checker.healthy_models if config.health_check.enabled else None
+                    retry_models = [original_model] + select_fallback_models(
+                        original_model,
+                        config.llms,
+                        healthy_models=healthy_set,
+                        already_tried=tried_models,
+                    )
+
+                    for try_model in retry_models:
+                        tried_models.add(try_model)
+                        mc = config.llms.get(try_model)
+                        if not mc:
+                            continue
+
+                        prep_messages, prep_extra, api_style = prepare_for_model(try_model)
+                        if prep_messages is None:
+                            continue
+
+                        try:
+                            logger.info("[backoff] retrying model=%s", try_model)
+                            resp = await call_router_with_gemini_fallback(
+                                router_instance=router,
+                                selected_model=try_model,
+                                provider_messages=prep_messages,
+                                request=request,
+                                extra_kwargs=prep_extra,
+                                provider_kwargs=provider_kwargs,
+                                provider_api_style=api_style,
+                                is_tool_continuation_turn=is_tool_continuation_turn,
+                                effective_max_tokens=effective_max_tokens,
+                            )
+                            logger.info("[backoff] succeeded with %s", try_model)
+                            return (resp, try_model, mc, api_style, prep_messages, prep_extra)
+
+                        except Exception as e:
+                            if not is_retryable_error(e):
+                                raise
+                            continue
+
+                    delay = min(delay * RETRY_MULTIPLIER, max_wait - total_waited)
+                    if delay <= 0:
+                        break
+
+                return None
 
             # Call the model with fallback on retryable errors
             async def call_model_with_fallback():
@@ -601,76 +631,30 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
 
                 # All models failed - backoff until next health check
                 if last_error and is_retryable_error(last_error):
-                    max_wait = config.health_check.interval if config.health_check.enabled else 60
-                    total_waited = 0.0
-                    delay = INITIAL_RETRY_DELAY
+                    result = await _backoff_retry_loop(
+                        original_model=original_model,
+                        tried_models=tried_models,
+                        prepare_for_model=prepare_for_model,
+                        provider_kwargs=provider_kwargs,
+                        is_tool_continuation_turn=is_tool_continuation_turn,
+                        effective_max_tokens=effective_max_tokens,
+                    )
+                    if result is not None:
+                        resp, try_model, mc, api_style, prep_messages, prep_extra = result
+                        selected_model = try_model
+                        model_config = mc
+                        provider_api_style = api_style
+                        provider_messages = prep_messages
+                        extra_kwargs = prep_extra
+                        return resp
 
-                    while total_waited < max_wait:
-                        logger.warning(
-                            "[backoff] all models failed, waiting %.1fs (%.0f/%.0fs)",
-                            delay,
-                            total_waited,
-                            max_wait,
-                        )
-                        await asyncio.sleep(delay)
-                        total_waited += delay
-
-                        # Re-run health check and reset tried models
-                        if config.health_check.enabled:
-                            await health_checker.run_check()
-                        tried_models.clear()
-
-                        # Rebuild fallback list with fresh health data
-                        healthy_set = health_checker.healthy_models if config.health_check.enabled else None
-                        retry_models = [original_model] + select_fallback_models(
-                            original_model,
-                            config.llms,
-                            healthy_models=healthy_set,
-                            already_tried=tried_models,
-                        )
-
-                        for try_model in retry_models:
-                            tried_models.add(try_model)
-                            mc = config.llms.get(try_model)
-                            if not mc:
-                                continue
-
-                            prep_messages, prep_extra, api_style = prepare_for_model(try_model)
-                            if prep_messages is None:
-                                continue
-
-                            try:
-                                logger.info("[backoff] retrying model=%s", try_model)
-                                resp = await call_router_with_gemini_fallback(
-                                    router_instance=router,
-                                    selected_model=try_model,
-                                    provider_messages=prep_messages,
-                                    request=request,
-                                    extra_kwargs=prep_extra,
-                                    provider_kwargs=provider_kwargs,
-                                    provider_api_style=api_style,
-                                    is_tool_continuation_turn=is_tool_continuation_turn,
-                                    effective_max_tokens=effective_max_tokens,
-                                )
-                                logger.info("[backoff] succeeded with %s", try_model)
-                                selected_model = try_model
-                                model_config = mc
-                                provider_api_style = api_style
-                                provider_messages = prep_messages
-                                extra_kwargs = prep_extra
-                                return resp
-
-                            except Exception as e:
-                                last_error = e
-                                if not is_retryable_error(e):
-                                    raise
-                                continue
-
-                        delay = min(delay * RETRY_MULTIPLIER, max_wait - total_waited)
-                        if delay <= 0:
-                            break
-
-                raise last_error
+                # Raise the last error, or a generic error if all models were skipped
+                if last_error:
+                    raise last_error
+                raise HTTPException(
+                    status_code=503,
+                    detail="All models were skipped or unavailable",
+                )
 
             response = await call_model_with_fallback()
 
