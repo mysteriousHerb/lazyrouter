@@ -134,6 +134,7 @@ class HealthChecker:
 
     @property
     def unhealthy_models(self) -> Set[str]:
+        """Return set of models that failed the last health check."""
         return set(self.config.llms.keys()) - self.healthy_models
 
     async def run_check(self) -> list[HealthCheckResult]:

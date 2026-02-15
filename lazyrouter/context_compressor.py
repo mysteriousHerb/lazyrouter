@@ -44,6 +44,7 @@ class CompressionStats:
     messages_dropped: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
+        """Convert compression stats to a dictionary with calculated savings."""
         tokens_saved = self.original_tokens - self.compressed_tokens
         savings_pct = (
             round((1 - self.compressed_tokens / self.original_tokens) * 100, 1)

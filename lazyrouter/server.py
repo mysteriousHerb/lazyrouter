@@ -116,10 +116,12 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
 
     @app.on_event("startup")
     async def startup():
+        """Start background health checker on app startup."""
         health_checker.start()
 
     @app.on_event("shutdown")
     async def shutdown():
+        """Stop background health checker on app shutdown."""
         health_checker.stop()
 
     @app.get("/health", response_model=HealthResponse)
@@ -662,6 +664,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             if request.stream:
 
                 async def logged_stream():
+                    """Wrap streaming response with logging and Gemini retry handling."""
                     collected_content = []
                     stream_usage = None
                     request_id = "stream"
