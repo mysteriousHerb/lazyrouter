@@ -9,10 +9,10 @@ from lazyrouter.config import (
     RouterConfig,
     ServeConfig,
 )
-from lazyrouter.models import BenchmarkResult
+from lazyrouter.models import HealthCheckResult
 
 
-def _config(*, fail_open_when_all_unhealthy: bool) -> Config:
+def _config() -> Config:
     return Config(
         serve=ServeConfig(),
         router=RouterConfig(provider="p1", model="m1"),
@@ -22,17 +22,15 @@ def _config(*, fail_open_when_all_unhealthy: bool) -> Config:
             "m2": ModelConfig(provider="p1", model="model-two", description="model two"),
         },
         health_check=HealthCheckConfig(
-            enabled=True,
             interval=300,
             max_latency_ms=10000,
-            fail_open_when_all_unhealthy=fail_open_when_all_unhealthy,
         ),
     )
 
 
-def test_health_checker_strict_mode_keeps_none_when_all_unhealthy(monkeypatch):
+def test_health_checker_keeps_none_when_all_unhealthy(monkeypatch):
     async def _fake_bench(*args, **kwargs):
-        return BenchmarkResult(
+        return HealthCheckResult(
             model=args[0],
             provider="p1",
             actual_model=args[2],
@@ -40,29 +38,10 @@ def test_health_checker_strict_mode_keeps_none_when_all_unhealthy(monkeypatch):
             error="429 overloaded",
         )
 
-    monkeypatch.setattr(hc_mod, "bench_one", _fake_bench)
+    monkeypatch.setattr(hc_mod, "check_model_health", _fake_bench)
 
-    checker = hc_mod.HealthChecker(_config(fail_open_when_all_unhealthy=False))
+    checker = hc_mod.HealthChecker(_config())
     asyncio.run(checker.run_check())
 
     assert checker.healthy_models == set()
     assert checker.unhealthy_models == {"m1", "m2"}
-
-
-def test_health_checker_fail_open_keeps_all_when_all_unhealthy(monkeypatch):
-    async def _fake_bench(*args, **kwargs):
-        return BenchmarkResult(
-            model=args[0],
-            provider="p1",
-            actual_model=args[2],
-            status="error",
-            error="429 overloaded",
-        )
-
-    monkeypatch.setattr(hc_mod, "bench_one", _fake_bench)
-
-    checker = hc_mod.HealthChecker(_config(fail_open_when_all_unhealthy=True))
-    asyncio.run(checker.run_check())
-
-    assert checker.healthy_models == {"m1", "m2"}
-    assert checker.unhealthy_models == set()

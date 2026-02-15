@@ -11,7 +11,7 @@ import litellm
 
 from .config import Config
 from .litellm_utils import build_litellm_params
-from .models import BenchmarkResult
+from .models import HealthCheckResult
 
 logger = logging.getLogger(__name__)
 
@@ -80,10 +80,10 @@ class LiteLLMWrapper:
         yield "data: [DONE]\n\n"
 
 
-async def bench_one(
+async def check_model_health(
     name: str, provider, actual_model: str, provider_name: str, is_router: bool = False
-) -> BenchmarkResult:
-    """Benchmark a single model with one non-streaming request."""
+) -> HealthCheckResult:
+    """Check health of a single model with one non-streaming request."""
     ttft_ms = None
     total_ms = None
     try:
@@ -97,7 +97,7 @@ async def bench_one(
         )
         total_ms = round((time.monotonic() - t0) * 1000, 1)
 
-        return BenchmarkResult(
+        return HealthCheckResult(
             model=name,
             provider=provider_name,
             actual_model=actual_model,
@@ -107,7 +107,7 @@ async def bench_one(
             total_ms=total_ms,
         )
     except Exception as e:
-        return BenchmarkResult(
+        return HealthCheckResult(
             model=name,
             provider=provider_name,
             actual_model=actual_model,
@@ -120,7 +120,7 @@ async def bench_one(
 
 
 class HealthChecker:
-    """Runs periodic benchmarks and tracks which models are healthy."""
+    """Runs periodic health checks and tracks which models are available."""
 
     def __init__(self, config: Config):
         self.config = config
@@ -128,15 +128,16 @@ class HealthChecker:
         self.healthy_models: Set[str] = set(
             config.llms.keys()
         )  # assume all healthy at start
-        self.last_results: Dict[str, BenchmarkResult] = {}
+        self.last_results: Dict[str, HealthCheckResult] = {}
         self.last_check: Optional[str] = None
         self._task: Optional[asyncio.Task] = None
 
     @property
     def unhealthy_models(self) -> Set[str]:
+        """Return set of models that failed the last health check."""
         return set(self.config.llms.keys()) - self.healthy_models
 
-    async def run_check(self) -> list[BenchmarkResult]:
+    async def run_check(self) -> list[HealthCheckResult]:
         """Run a single health check against all configured models."""
         tasks = []
         model_names = []
@@ -152,7 +153,7 @@ class HealthChecker:
             model_names.append(model_name)
             tasks.append(
                 asyncio.wait_for(
-                    bench_one(
+                    check_model_health(
                         model_name, provider, model_config.model, model_config.provider
                     ),
                     timeout=self.hc_config.max_latency_ms / 1000
@@ -166,7 +167,7 @@ class HealthChecker:
         new_healthy = set()
         for i, r in enumerate(raw_results):
             name = model_names[i]
-            if isinstance(r, BenchmarkResult):
+            if isinstance(r, HealthCheckResult):
                 results.append(r)
                 self.last_results[name] = r
                 if (
@@ -185,7 +186,7 @@ class HealthChecker:
             else:
                 err = "Timed out" if isinstance(r, asyncio.TimeoutError) else str(r)
                 mc = self.config.llms[name]
-                result = BenchmarkResult(
+                result = HealthCheckResult(
                     model=name,
                     provider=mc.provider,
                     actual_model=mc.model,
@@ -197,17 +198,11 @@ class HealthChecker:
                 self.last_results[name] = result
                 logger.warning(f"Health check: {name} unhealthy — {err}")
 
-        # Edge case: if ALL models are unhealthy, either fail-open or keep none.
+        # If ALL models are unhealthy, log error and keep none available (strict mode)
         if not new_healthy:
-            if getattr(self.hc_config, "fail_open_when_all_unhealthy", False):
-                logger.warning(
-                    "Health check: ALL models unhealthy, fail-open enabled; keeping all available"
-                )
-                new_healthy = set(self.config.llms.keys())
-            else:
-                logger.error(
-                    "Health check: ALL models unhealthy, strict mode enabled; keeping none available"
-                )
+            logger.error(
+                "Health check: ALL models unhealthy; keeping none available"
+            )
 
         if new_healthy != self.healthy_models:
             added = new_healthy - self.healthy_models
@@ -241,9 +236,6 @@ class HealthChecker:
 
     def start(self):
         """Start the background health check loop."""
-        if not self.hc_config.enabled:
-            logger.info("Health checks disabled")
-            return
         logger.info(
             f"Starting health checks every {self.hc_config.interval}s "
             f"(max_latency={self.hc_config.max_latency_ms}ms)"
