@@ -49,6 +49,13 @@ from .tool_cache import (
     tool_cache_set,
 )
 from .usage_logger import UsageLogger, estimate_tokens
+from .retry_handler import (
+    is_retryable_error,
+    select_fallback_models,
+    INITIAL_RETRY_DELAY,
+    RETRY_MULTIPLIER,
+    MAX_FALLBACK_MODELS,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -258,15 +265,49 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             routing_response = None
             routing_result = None
             router_skipped_reason = None
+            routing_reasoning = None
             if request.model == "auto":
                 selected_model = None
-                if (
-                    config.health_check.enabled
-                    and len(config.llms) > 0
-                    and len(health_checker.healthy_models) == 0
-                ):
+
+                # Check for healthy models with backoff retry until next health check
+                async def wait_for_healthy_models():
+                    """Wait for healthy models with backoff until next scheduled health check"""
+                    if not config.health_check.enabled or len(config.llms) == 0:
+                        return True
+                    if len(health_checker.healthy_models) > 0:
+                        return True
+
+                    # Retry with backoff until next health check interval
+                    max_wait = config.health_check.interval
+                    total_waited = 0.0
+                    delay = INITIAL_RETRY_DELAY
+
+                    while total_waited < max_wait:
+                        logger.warning(
+                            "[health-check] no healthy models, waiting %.1fs (%.0f/%.0fs until next check)",
+                            delay,
+                            total_waited,
+                            max_wait,
+                        )
+                        await asyncio.sleep(delay)
+                        total_waited += delay
+                        # Trigger a health check
+                        await health_checker.run_check()
+                        if len(health_checker.healthy_models) > 0:
+                            logger.info(
+                                "[health-check] models recovered: %s",
+                                list(health_checker.healthy_models),
+                            )
+                            return True
+                        delay = min(delay * RETRY_MULTIPLIER, max_wait - total_waited)
+                        if delay <= 0:
+                            break
+                    return False
+
+                has_healthy = await wait_for_healthy_models()
+                if not has_healthy and config.health_check.enabled and len(config.llms) > 0:
                     logger.warning(
-                        "[health-check] no healthy models available; rejecting auto request"
+                        "[health-check] no healthy models available after retries; rejecting auto request"
                     )
                     raise HTTPException(
                         status_code=503,
@@ -456,19 +497,182 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                 if key not in passthrough_exclude and value is not None:
                     provider_kwargs[key] = value
 
-            # Call the router (which uses LiteLLM)
-            logger.info("[model-call] selected_model=%s", selected_model)
-            response = await call_router_with_gemini_fallback(
-                router_instance=router,
-                selected_model=selected_model,
-                provider_messages=provider_messages,
-                request=request,
-                extra_kwargs=extra_kwargs,
-                provider_kwargs=provider_kwargs,
-                provider_api_style=provider_api_style,
-                is_tool_continuation_turn=is_tool_continuation_turn,
-                effective_max_tokens=effective_max_tokens,
-            )
+            # Helper to prepare provider-specific messages and kwargs for a model
+            def prepare_for_model(model_name: str):
+                """Prepare messages and kwargs for a specific model's provider"""
+                mc = config.llms.get(model_name)
+                if not mc:
+                    return None, None, None
+                api_style = config.get_api_style(mc.provider).lower()
+                prep_messages = messages
+                prep_extra = {}
+
+                if api_style == "gemini":
+                    prep_messages = sanitize_messages_for_gemini(messages)
+
+                if request.tools:
+                    tools = request.tools
+                    if api_style == "anthropic":
+                        prep_extra["tools"] = sanitize_tool_schema_for_anthropic(tools)
+                    elif api_style == "gemini":
+                        prep_extra["tools"] = sanitize_tool_schema_for_gemini(
+                            tools, output_format="openai"
+                        )
+                    else:
+                        prep_extra["tools"] = tools
+
+                if request.tool_choice is not None:
+                    prep_extra["tool_choice"] = request.tool_choice
+
+                return prep_messages, prep_extra, api_style
+
+            # Call the model with fallback on retryable errors
+            async def call_model_with_fallback():
+                """Call model with fallback to similar-ELO models on retryable errors"""
+                nonlocal selected_model, model_config, provider_api_style
+                nonlocal provider_messages, extra_kwargs
+
+                tried_models = set()
+                original_model = selected_model
+                healthy_set = health_checker.healthy_models if config.health_check.enabled else None
+
+                # Build fallback list: original model + ELO-similar models
+                models_to_try = [selected_model] + select_fallback_models(
+                    selected_model,
+                    config.llms,
+                    healthy_models=healthy_set,
+                    already_tried=tried_models,
+                )
+
+                last_error = None
+                for try_model in models_to_try:
+                    tried_models.add(try_model)
+                    mc = config.llms.get(try_model)
+                    if not mc:
+                        continue
+
+                    prep_messages, prep_extra, api_style = prepare_for_model(try_model)
+                    if prep_messages is None:
+                        continue
+
+                    try:
+                        logger.info("[model-call] trying model=%s", try_model)
+                        resp = await call_router_with_gemini_fallback(
+                            router_instance=router,
+                            selected_model=try_model,
+                            provider_messages=prep_messages,
+                            request=request,
+                            extra_kwargs=prep_extra,
+                            provider_kwargs=provider_kwargs,
+                            provider_api_style=api_style,
+                            is_tool_continuation_turn=is_tool_continuation_turn,
+                            effective_max_tokens=effective_max_tokens,
+                        )
+                        # Success - update state
+                        if try_model != original_model:
+                            logger.info(
+                                "[fallback] succeeded with %s (ELO-similar) after %s failed",
+                                try_model,
+                                original_model,
+                            )
+                        selected_model = try_model
+                        model_config = mc
+                        provider_api_style = api_style
+                        provider_messages = prep_messages
+                        extra_kwargs = prep_extra
+                        return resp
+
+                    except Exception as e:
+                        last_error = e
+                        if is_retryable_error(e):
+                            logger.warning(
+                                "[fallback] model %s failed with retryable error: %s",
+                                try_model,
+                                str(e)[:200],
+                            )
+                            continue
+                        else:
+                            logger.error(
+                                "[fallback] model %s failed with non-retryable error: %s",
+                                try_model,
+                                str(e)[:200],
+                            )
+                            raise
+
+                # All models failed - backoff until next health check
+                if last_error and is_retryable_error(last_error):
+                    max_wait = config.health_check.interval if config.health_check.enabled else 60
+                    total_waited = 0.0
+                    delay = INITIAL_RETRY_DELAY
+
+                    while total_waited < max_wait:
+                        logger.warning(
+                            "[backoff] all models failed, waiting %.1fs (%.0f/%.0fs)",
+                            delay,
+                            total_waited,
+                            max_wait,
+                        )
+                        await asyncio.sleep(delay)
+                        total_waited += delay
+
+                        # Re-run health check and reset tried models
+                        if config.health_check.enabled:
+                            await health_checker.run_check()
+                        tried_models.clear()
+
+                        # Rebuild fallback list with fresh health data
+                        healthy_set = health_checker.healthy_models if config.health_check.enabled else None
+                        retry_models = [original_model] + select_fallback_models(
+                            original_model,
+                            config.llms,
+                            healthy_models=healthy_set,
+                            already_tried=tried_models,
+                        )
+
+                        for try_model in retry_models:
+                            tried_models.add(try_model)
+                            mc = config.llms.get(try_model)
+                            if not mc:
+                                continue
+
+                            prep_messages, prep_extra, api_style = prepare_for_model(try_model)
+                            if prep_messages is None:
+                                continue
+
+                            try:
+                                logger.info("[backoff] retrying model=%s", try_model)
+                                resp = await call_router_with_gemini_fallback(
+                                    router_instance=router,
+                                    selected_model=try_model,
+                                    provider_messages=prep_messages,
+                                    request=request,
+                                    extra_kwargs=prep_extra,
+                                    provider_kwargs=provider_kwargs,
+                                    provider_api_style=api_style,
+                                    is_tool_continuation_turn=is_tool_continuation_turn,
+                                    effective_max_tokens=effective_max_tokens,
+                                )
+                                logger.info("[backoff] succeeded with %s", try_model)
+                                selected_model = try_model
+                                model_config = mc
+                                provider_api_style = api_style
+                                provider_messages = prep_messages
+                                extra_kwargs = prep_extra
+                                return resp
+
+                            except Exception as e:
+                                last_error = e
+                                if not is_retryable_error(e):
+                                    raise
+                                continue
+
+                        delay = min(delay * RETRY_MULTIPLIER, max_wait - total_waited)
+                        if delay <= 0:
+                            break
+
+                raise last_error
+
+            response = await call_model_with_fallback()
 
             # Handle streaming vs non-streaming
             if request.stream:
