@@ -3,7 +3,7 @@
 [English](README.md) | [中文](README_CN.md)
 
 <p align="center">
-  <img src="assets/lazyrouter_logo.png" alt="LazyRouter Logo" width="280"/>
+  <img src="assets/懒人路由 logo.png" alt="LazyRouter Logo" width="280"/>
 </p>
 
 懒人路由是一个轻量级的 OpenAI 兼容路由器，能够为每个请求自动选择最合适的模型。
