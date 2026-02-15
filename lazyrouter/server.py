@@ -139,6 +139,8 @@ def create_app(
 
     # Load configuration
     if preloaded_config is not None:
+        # When config is already loaded by the caller (CLI non-reload path),
+        # env_file has already been applied during that initial load step.
         config = preloaded_config
         logger.info("Using preloaded configuration")
     else:
@@ -146,7 +148,7 @@ def create_app(
             config = load_config(config_path, env_file=env_file)
             logger.info(f"Loaded configuration from {config_path}")
         except Exception as e:
-            logger.error(f"Failed to load configuration: {e}")
+            logger.exception(f"Failed to load configuration: {e}")
             raise
 
     # Initialize router
