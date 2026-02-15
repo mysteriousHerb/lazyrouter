@@ -1,4 +1,5 @@
 from lazyrouter.server import (
+    _get_first_response_message,
     _model_prefix,
     _prefix_stream_delta_content_if_needed,
     _with_model_prefix_if_enabled,
@@ -35,3 +36,15 @@ def test_prefix_stream_delta_content_if_needed_skips_chunks_without_content():
     assert out == ""
     assert pending is True
     assert "content" not in delta
+
+
+def test_prefix_stream_delta_content_if_needed_deduplicates_existing_prefix():
+    delta = {"role": "assistant", "content": "[m1] hello"}
+    out, pending = _prefix_stream_delta_content_if_needed(delta, "[m1] ", True)
+    assert out == "[m1] hello"
+    assert pending is False
+    assert delta["content"] == "[m1] hello"
+
+
+def test_get_first_response_message_returns_none_for_empty_choices():
+    assert _get_first_response_message({"choices": []}) is None

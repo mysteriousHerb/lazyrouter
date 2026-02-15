@@ -97,9 +97,27 @@ def _prefix_stream_delta_content_if_needed(
     """Prefix first streamed text delta and return updated content + pending flag."""
     delta_content = delta.get("content", "")
     if prefix_pending and "content" in delta and isinstance(delta_content, str):
+        if delta_content.startswith(model_prefix):
+            return delta_content, False
         delta["content"] = model_prefix + delta_content
         return delta["content"], False
     return delta_content, prefix_pending
+
+
+def _get_first_response_message(response: Dict[str, Any]) -> Dict[str, Any] | None:
+    """Safely return first choice message dict from a non-streaming response."""
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        return None
+
+    message = first_choice.get("message")
+    if not isinstance(message, dict):
+        return None
+    return message
 
 
 def create_app(config_path: str = "config.yaml") -> FastAPI:
@@ -768,7 +786,11 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                                         if chunk_data.get("usage"):
                                             stream_usage = chunk_data["usage"]
                                         for choice in chunk_data.get("choices", []):
+                                            if not isinstance(choice, dict):
+                                                continue
                                             delta = choice.get("delta", {})
+                                            if not isinstance(delta, dict):
+                                                continue
                                             for tool_call in (
                                                 delta.get("tool_calls", []) or []
                                             ):
@@ -794,14 +816,18 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                                                             else "",
                                                         }
                                                     )
-                                            (
-                                                delta_content,
-                                                model_prefix_pending,
-                                            ) = _prefix_stream_delta_content_if_needed(
-                                                delta,
-                                                response_model_prefix,
-                                                model_prefix_pending,
-                                            )
+                                            choice_index = choice.get("index", 0)
+                                            if choice_index == 0:
+                                                (
+                                                    delta_content,
+                                                    model_prefix_pending,
+                                                ) = _prefix_stream_delta_content_if_needed(
+                                                    delta,
+                                                    response_model_prefix,
+                                                    model_prefix_pending,
+                                                )
+                                            else:
+                                                delta_content = delta.get("content", "")
                                             if delta_content:
                                                 collected_content.append(delta_content)
                                         emitted_chunks += 1
@@ -950,16 +976,17 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                     # Log after stream completes
                     await _close_stream_if_possible(current_response)
                     latency_ms = (time.monotonic() - start_time) * 1000
+                    stream_response_content = "".join(collected_content)
+                    if show_model_prefix:
+                        stream_response_content = stream_response_content.removeprefix(
+                            response_model_prefix
+                        )
                     entry = usage_logger.build_entry(
                         request_id=request_id,
                         model_requested=request.model,
                         model_selected=selected_model,
                         messages=messages,
-                        response_content=(
-                            "".join(collected_content).removeprefix(response_model_prefix)
-                            if show_model_prefix
-                            else "".join(collected_content)
-                        ),
+                        response_content=stream_response_content,
                         usage=stream_usage,
                         model_input_price=model_config.input_price,
                         model_output_price=model_config.output_price,
@@ -985,6 +1012,13 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                     logged_stream(), media_type="text/event-stream"
                 )
             else:
+                response_message = _get_first_response_message(response)
+                response_content = (
+                    content_to_text(response_message.get("content"))
+                    if response_message
+                    else ""
+                )
+
                 # Log non-streaming response
                 latency_ms = (time.monotonic() - start_time) * 1000
                 entry = usage_logger.build_entry(
@@ -992,7 +1026,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                     model_requested=request.model,
                     model_selected=selected_model,
                     messages=messages,
-                    response_content=response["choices"][0]["message"]["content"],
+                    response_content=response_content,
                     usage=response.get("usage"),
                     model_input_price=model_config.input_price,
                     model_output_price=model_config.output_price,
@@ -1003,12 +1037,9 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                     compression_stats=compression_stats,
                 )
                 usage_logger.log(entry)
-                tool_calls = (
-                    response.get("choices", [{}])[0]
-                    .get("message", {})
-                    .get("tool_calls")
-                    or []
-                )
+                tool_calls = response_message.get("tool_calls") if response_message else []
+                if not isinstance(tool_calls, list):
+                    tool_calls = []
                 used_tool_names = []
                 for tool_call in tool_calls:
                     if not isinstance(tool_call, dict):
@@ -1027,12 +1058,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                 if used_tool_names:
                     logger.info(f"[tool-calls] {used_tool_names}")
 
-                response_message = (
-                    response.get("choices", [{}])[0].get("message", {})
-                    if isinstance(response.get("choices"), list)
-                    else {}
-                )
-                if isinstance(response_message, dict):
+                if show_model_prefix and response_message:
                     response_message["content"] = _with_model_prefix_if_enabled(
                         response_message.get("content"),
                         selected_model,
