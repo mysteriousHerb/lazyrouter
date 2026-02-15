@@ -51,6 +51,7 @@ def main():
     # Determine host and port
     host = args.host or config.serve.host
     port = args.port or config.serve.port
+    log_level = "debug" if config.serve.debug else "info"
 
     print(f"Starting LazyRouter server on {host}:{port}")
     print(f"Router model: {config.router.model}")
@@ -73,7 +74,8 @@ def main():
             port=port,
             reload=True,
             factory=True,
+            log_level=log_level,
         )
     else:
         app = create_app(args.config)
-        uvicorn.run(app, host=host, port=port)
+        uvicorn.run(app, host=host, port=port, log_level=log_level)

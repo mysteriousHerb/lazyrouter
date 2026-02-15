@@ -7,7 +7,6 @@ serve:
   port: 1234
   show_model_prefix: true
   debug: false
-  capture_requests: false
   # api_key: "set-an-internal-key-if-you-want-to-protect-the-router"
 
 # Providers map names -> credentials/endpoints.

@@ -48,7 +48,7 @@ from .tool_cache import (
     tool_cache_clear_session,
     tool_cache_set,
 )
-from .usage_logger import UsageLogger, estimate_tokens
+from .usage_logger import UsageLogger
 
 # Configure logging
 logging.basicConfig(
@@ -66,6 +66,13 @@ usage_logger: UsageLogger = None
 health_checker: HealthChecker = None
 
 
+def _configure_logging(debug: bool) -> None:
+    """Apply runtime log level from config."""
+    level = logging.DEBUG if debug else logging.INFO
+    logging.getLogger().setLevel(level)
+    logger.setLevel(level)
+
+
 def create_app(config_path: str = "config.yaml") -> FastAPI:
     """Create and configure FastAPI application
 
@@ -80,6 +87,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
     # Load configuration
     try:
         config = load_config(config_path)
+        _configure_logging(config.serve.debug)
         logger.info(f"Loaded configuration from {config_path}")
     except Exception as e:
         logger.error(f"Failed to load configuration: {e}")
@@ -173,7 +181,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                 msg_dict.update(extras)
                 messages.append(msg_dict)
 
-            # Log request context (last user message + whether tool results are included)
+            # Build minimal request context needed for cache/session behavior.
             last_user_text_raw = ""
             for msg in reversed(messages):
                 if msg.get("role") == "user":
@@ -188,71 +196,9 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                         cleared_tool,
                         session_key,
                     )
-            last_user_text = last_user_text_raw
-            last_user_text = " ".join(last_user_text.split())
-            if len(last_user_text) > 420:
-                last_user_text = last_user_text[:420] + "..."
             tool_name_by_id = tool_call_name_by_id(messages)
-            all_tool_results = [
-                m for m in messages if m.get("role") == "tool" and m.get("tool_call_id")
-            ]
             incoming_tool_results = collect_trailing_tool_results(messages)
             is_tool_continuation_turn = bool(incoming_tool_results)
-
-            # One-line request log with user query for easier debugging/copying.
-            tool_suffix = (
-                f" (tool continuation: {len(incoming_tool_results)} results)"
-                if is_tool_continuation_turn
-                else ""
-            )
-            logger.debug(
-                "[request] model=%s session=%s user=%s%s",
-                request.model,
-                session_key or "no-session",
-                last_user_text,
-                tool_suffix,
-            )
-
-            if all_tool_results:
-                in_names = sorted(
-                    {
-                        (
-                            m.get("name")
-                            if isinstance(m.get("name"), str) and m.get("name")
-                            else tool_name_by_id.get(
-                                str(m.get("tool_call_id", "")).strip()
-                            )
-                        )
-                        for m in all_tool_results
-                        if (isinstance(m.get("name"), str) and m.get("name"))
-                        or tool_name_by_id.get(str(m.get("tool_call_id", "")).strip())
-                    }
-                )
-                empty_results = sum(
-                    1
-                    for m in all_tool_results
-                    if not content_to_text(m.get("content")).strip()
-                )
-                logger.debug(
-                    "[tool-results-in] continuation=%s trailing=%s total=%s names=%s empty=%s",
-                    is_tool_continuation_turn,
-                    len(incoming_tool_results),
-                    len(all_tool_results),
-                    in_names,
-                    empty_results,
-                )
-                if incoming_tool_results:
-                    incoming_tool_text = "\n".join(
-                        content_to_text(m.get("content")) for m in incoming_tool_results
-                    )
-                    logger.info(
-                        "[tool-results-size] trailing=%s chars=%s tokens~%s",
-                        len(incoming_tool_results),
-                        len(incoming_tool_text),
-                        estimate_tokens(incoming_tool_text),
-                    )
-            else:
-                in_names = []
 
             # Determine which model to use
             routing_response = None
