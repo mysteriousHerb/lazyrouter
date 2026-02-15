@@ -1,4 +1,10 @@
-"""Token estimation helpers."""
+"""Token estimation helpers.
+
+This module was previously responsible for usage logging via a ``UsageLogger``
+class. The filename ``usage_logger.py`` is retained for backward compatibility,
+but the current responsibility of this module is limited to token estimation
+utilities.
+"""
 
 import logging
 from typing import Any, Dict, List, Optional
