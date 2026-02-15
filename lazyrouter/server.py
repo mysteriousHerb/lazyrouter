@@ -280,18 +280,20 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
 
                     # Retry with backoff, capped at 60s to avoid blocking requests too long
                     max_wait = min(config.health_check.interval, 60)
-                    total_waited = 0.0
+                    start_time = time.monotonic()
                     delay = INITIAL_RETRY_DELAY
 
-                    while total_waited < max_wait:
+                    while True:
+                        elapsed = time.monotonic() - start_time
+                        if elapsed >= max_wait:
+                            break
                         logger.warning(
                             "[health-check] no healthy models, waiting %.1fs (%.0f/%.0fs until next check)",
                             delay,
-                            total_waited,
+                            elapsed,
                             max_wait,
                         )
                         await asyncio.sleep(delay)
-                        total_waited += delay
                         # Trigger a health check
                         await health_checker.run_check()
                         if len(health_checker.healthy_models) > 0:
@@ -300,7 +302,8 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                                 list(health_checker.healthy_models),
                             )
                             return True
-                        delay = min(delay * RETRY_MULTIPLIER, max_wait - total_waited)
+                        elapsed = time.monotonic() - start_time
+                        delay = min(delay * RETRY_MULTIPLIER, max_wait - elapsed)
                         if delay <= 0:
                             break
                     return False
@@ -490,18 +493,20 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                 or None if all retries exhausted.
                 """
                 max_wait = min(config.health_check.interval, 60)  # Cap at 60s
-                total_waited = 0.0
+                start_time = time.monotonic()
                 delay = INITIAL_RETRY_DELAY
 
-                while total_waited < max_wait:
+                while True:
+                    elapsed = time.monotonic() - start_time
+                    if elapsed >= max_wait:
+                        break
                     logger.warning(
                         "[backoff] all models failed, waiting %.1fs (%.0f/%.0fs)",
                         delay,
-                        total_waited,
+                        elapsed,
                         max_wait,
                     )
                     await asyncio.sleep(delay)
-                    total_waited += delay
 
                     # Re-run health check and reset tried models
                     await health_checker.run_check()
@@ -547,7 +552,8 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                                 raise
                             continue
 
-                    delay = min(delay * RETRY_MULTIPLIER, max_wait - total_waited)
+                    elapsed = time.monotonic() - start_time
+                    delay = min(delay * RETRY_MULTIPLIER, max_wait - elapsed)
                     if delay <= 0:
                         break
 
