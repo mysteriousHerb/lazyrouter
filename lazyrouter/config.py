@@ -96,12 +96,8 @@ class ContextCompressionConfig(BaseModel):
 class HealthCheckConfig(BaseModel):
     """Periodic health check settings"""
 
-    enabled: bool = False
     interval: int = 300  # seconds between checks
     max_latency_ms: int = 10000  # models slower than this are excluded
-    fail_open_when_all_unhealthy: bool = (
-        False  # if true, keep all models routable when all fail checks
-    )
 
 
 class Config(BaseModel):
@@ -115,16 +111,19 @@ class Config(BaseModel):
     health_check: HealthCheckConfig = HealthCheckConfig()
 
     def get_api_key(self, provider: str) -> str:
+        """Get API key for a provider."""
         if provider not in self.providers:
             raise ValueError(f"Provider '{provider}' not found in providers config")
         return self.providers[provider].api_key
 
     def get_base_url(self, provider: str) -> Optional[str]:
+        """Get base URL for a provider, if configured."""
         if provider not in self.providers:
             raise ValueError(f"Provider '{provider}' not found in providers config")
         return self.providers[provider].base_url
 
     def get_api_style(self, provider: str) -> str:
+        """Get API style (openai, anthropic, gemini) for a provider."""
         if provider not in self.providers:
             raise ValueError(f"Provider '{provider}' not found in providers config")
         return self.providers[provider].api_style

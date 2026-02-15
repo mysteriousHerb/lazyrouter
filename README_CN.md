@@ -31,6 +31,8 @@
 - 内置 OpenAI、Gemini 和 Anthropic 风格之间的兼容性处理
 - 支持流式和非流式响应
 - 健康检查和基准测试端点，提供运维可见性
+- 速率限制或错误时自动切换到 ELO 相近的模型
+- 所有模型暂时不可用时指数退避重试
 
 ## 快速开始
 
@@ -117,11 +119,11 @@ curl -X POST http://localhost:1234/v1/chat/completions \
 
 ## API 端点
 
-- `GET /health`
-- `GET /v1/models`
-- `GET /v1/health-status`
-- `GET /v1/benchmark`
-- `POST /v1/chat/completions`
+- `GET /health` - 存活检查
+- `GET /v1/models` - 列出可用模型
+- `GET /v1/health-status` - 显示缓存的健康检查结果
+- `GET /v1/health-check` - 立即运行健康检查并返回结果
+- `POST /v1/chat/completions` - OpenAI 兼容的聊天端点
 
 ## 技术实现
 
@@ -150,6 +152,8 @@ curl -X POST http://localhost:1234/v1/chat/completions \
 - **上下文压缩** (`context_compressor.py`)：修剪对话历史以控制长智能体会话中的 token 使用。可通过 `max_history_tokens` 和 `keep_recent_exchanges` 配置。
 
 - **健康检查器** (`health_checker.py`)：后台任务，定期 ping 模型并将不健康的模型从路由决策中排除。
+
+- **重试处理器** (`retry_handler.py`)：速率限制或错误时自动切换到 ELO 相近的模型。所有模型失败时指数退避重试，与健康检查间隔关联。
 
 - **工具缓存** (`tool_cache.py`)：按会话缓存工具调用 ID 到模型的映射，使工具延续时可以绕过路由器以降低延迟。
 

@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 def is_gemini_tool_type_proto_error(error_text: str) -> bool:
+    """Check if error is a Gemini tool_type proto validation error."""
     lowered = (error_text or "").lower()
     return (
         "generatecontentrequest" in lowered

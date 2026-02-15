@@ -32,6 +32,8 @@ It also helps translate behavior across API styles (OpenAI, Gemini, and Anthropi
 - Built-in compatibility handling between OpenAI, Gemini, and Anthropic styles
 - Streaming and non-streaming response support
 - Health and benchmark endpoints for operational visibility
+- Automatic model fallback on rate limits or errors (tries ELO-similar models)
+- Exponential backoff retry when all models are temporarily unavailable
 
 ## Quick Start
 
@@ -120,11 +122,11 @@ curl -X POST http://localhost:1234/v1/chat/completions \
 
 ## API Endpoints
 
-- `GET /health`
-- `GET /v1/models`
-- `GET /v1/health-status`
-- `GET /v1/benchmark`
-- `POST /v1/chat/completions`
+- `GET /health` - Liveness check
+- `GET /v1/models` - List available models
+- `GET /v1/health-status` - Show cached health check results
+- `GET /v1/health-check` - Run health check now and return results
+- `POST /v1/chat/completions` - OpenAI-compatible chat endpoint
 
 ## Technical Implementation
 
@@ -153,6 +155,8 @@ Key components:
 - **Context Compression** (`context_compressor.py`): Trims conversation history to control token usage in long agent sessions. Configurable via `max_history_tokens` and `keep_recent_exchanges`.
 
 - **Health Checker** (`health_checker.py`): Background task that periodically pings models and excludes unhealthy ones from routing decisions.
+
+- **Retry Handler** (`retry_handler.py`): Automatic fallback to ELO-similar models on rate limits or errors. Exponential backoff retry when all models fail, tied to health check interval.
 
 - **Tool Cache** (`tool_cache.py`): Caches tool call IDs to model mappings per session, enabling router bypass on tool continuations for lower latency.
 
