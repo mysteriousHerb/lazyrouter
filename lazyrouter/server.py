@@ -73,6 +73,35 @@ usage_logger: UsageLogger = None
 health_checker: HealthChecker = None
 
 
+def _model_prefix(selected_model: str) -> str:
+    """Return visible model prefix for assistant text responses."""
+    return f"[{selected_model}] "
+
+
+def _with_model_prefix_if_enabled(
+    content: Any, selected_model: str, show_model_prefix: bool
+) -> Any:
+    """Prepend model prefix to plain-text content when enabled."""
+    if not show_model_prefix or not isinstance(content, str):
+        return content
+
+    prefix = _model_prefix(selected_model)
+    if content.startswith(prefix):
+        return content
+    return f"{prefix}{content}"
+
+
+def _prefix_stream_delta_content_if_needed(
+    delta: Dict[str, Any], model_prefix: str, prefix_pending: bool
+) -> tuple[str, bool]:
+    """Prefix first streamed text delta and return updated content + pending flag."""
+    delta_content = delta.get("content", "")
+    if prefix_pending and "content" in delta and isinstance(delta_content, str):
+        delta["content"] = model_prefix + delta_content
+        return delta["content"], False
+    return delta_content, prefix_pending
+
+
 def create_app(config_path: str = "config.yaml") -> FastAPI:
     """Create and configure FastAPI application
 
@@ -660,6 +689,8 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                 )
 
             response = await call_model_with_fallback()
+            show_model_prefix = bool(getattr(config.serve, "show_model_prefix", False))
+            response_model_prefix = _model_prefix(selected_model)
 
             # Handle streaming vs non-streaming
             if request.stream:
@@ -676,6 +707,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                     retried_gemini_tool_schema = False
                     retried_gemini_tool_schema_camel = False
                     retried_gemini_without_tools = False
+                    model_prefix_pending = show_model_prefix
                     current_response = response
 
                     def _router_meta() -> Dict[str, Any]:
@@ -762,8 +794,13 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                                                             else "",
                                                         }
                                                     )
-                                            delta_content = choice.get("delta", {}).get(
-                                                "content", ""
+                                            (
+                                                delta_content,
+                                                model_prefix_pending,
+                                            ) = _prefix_stream_delta_content_if_needed(
+                                                delta,
+                                                response_model_prefix,
+                                                model_prefix_pending,
                                             )
                                             if delta_content:
                                                 collected_content.append(delta_content)
@@ -918,7 +955,11 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                         model_requested=request.model,
                         model_selected=selected_model,
                         messages=messages,
-                        response_content="".join(collected_content),
+                        response_content=(
+                            "".join(collected_content).removeprefix(response_model_prefix)
+                            if show_model_prefix
+                            else "".join(collected_content)
+                        ),
                         usage=stream_usage,
                         model_input_price=model_config.input_price,
                         model_output_price=model_config.output_price,
@@ -985,6 +1026,18 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                         )
                 if used_tool_names:
                     logger.info(f"[tool-calls] {used_tool_names}")
+
+                response_message = (
+                    response.get("choices", [{}])[0].get("message", {})
+                    if isinstance(response.get("choices"), list)
+                    else {}
+                )
+                if isinstance(response_message, dict):
+                    response_message["content"] = _with_model_prefix_if_enabled(
+                        response_message.get("content"),
+                        selected_model,
+                        show_model_prefix,
+                    )
 
                 # Set model field to show which model was selected
                 response["model"] = selected_model

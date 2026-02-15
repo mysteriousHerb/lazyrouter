@@ -5,7 +5,7 @@
 serve:
   host: "0.0.0.0"
   port: 1234
-  show_model_prefix: true
+  show_model_prefix: true  # Prepend assistant text with "[routed-model] ".
   debug: false
   capture_requests: false
   # api_key: "set-an-internal-key-if-you-want-to-protect-the-router"
