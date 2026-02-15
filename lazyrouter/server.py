@@ -48,7 +48,6 @@ from .tool_cache import (
     tool_cache_clear_session,
     tool_cache_set,
 )
-from .usage_logger import UsageLogger
 
 # Configure logging
 logging.basicConfig(
@@ -62,7 +61,6 @@ logger = logging.getLogger(__name__)
 # Global config and router (initialized in create_app)
 config: Config = None
 router: LLMRouter = None
-usage_logger: UsageLogger = None
 health_checker: HealthChecker = None
 
 
@@ -82,7 +80,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
     Returns:
         Configured FastAPI app
     """
-    global config, router, usage_logger, health_checker
+    global config, router, health_checker
 
     # Load configuration
     try:
@@ -100,10 +98,6 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
     except Exception as e:
         logger.error(f"Failed to initialize router: {e}")
         raise
-
-    # Initialize usage logger
-    usage_logger = UsageLogger()
-    logger.info(f"Usage logging to {usage_logger.log_path}")
 
     # Initialize health checker
     health_checker = HealthChecker(config)
@@ -168,7 +162,6 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
 
         Supports both automatic routing (model="auto") and manual model selection
         """
-        start_time = time.monotonic()
         try:
             routing_reasoning = None
 
@@ -420,8 +413,6 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             if request.stream:
 
                 async def logged_stream():
-                    collected_content = []
-                    stream_usage = None
                     request_id = "stream"
                     sent_router_meta = False
                     streamed_tool_names = set()
@@ -487,8 +478,6 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                                         if not sent_router_meta:
                                             chunk_data["lazyrouter"] = _router_meta()
                                             sent_router_meta = True
-                                        if chunk_data.get("usage"):
-                                            stream_usage = chunk_data["usage"]
                                         for choice in chunk_data.get("choices", []):
                                             delta = choice.get("delta", {})
                                             for tool_call in (
@@ -516,11 +505,6 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                                                             else "",
                                                         }
                                                     )
-                                            delta_content = choice.get("delta", {}).get(
-                                                "content", ""
-                                            )
-                                            if delta_content:
-                                                collected_content.append(delta_content)
                                         emitted_chunks += 1
                                         yield f"data: {json.dumps(chunk_data)}\n\n"
                                     except json.JSONDecodeError:
@@ -664,33 +648,14 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                             yield "data: [DONE]\n\n"
                             break
 
-                    # Log after stream completes
+                    # Close upstream stream after completion or retry exit.
                     await _close_stream_if_possible(current_response)
-                    latency_ms = (time.monotonic() - start_time) * 1000
-                    entry = usage_logger.build_entry(
-                        request_id=request_id,
-                        model_requested=request.model,
-                        model_selected=selected_model,
-                        messages=messages,
-                        response_content="".join(collected_content),
-                        usage=stream_usage,
-                        model_input_price=model_config.input_price,
-                        model_output_price=model_config.output_price,
-                        stream=True,
-                        temperature=request.temperature,
-                        latency_ms=latency_ms,
-                        routing_response=routing_response,
-                        compression_stats=compression_stats,
-                    )
-                    usage_logger.log(entry)
-                    cached_count = 0
                     for tc in streamed_tool_calls:
                         tcid = str(tc.get("id", "")).strip()
                         tname = str(tc.get("name", "")).strip()
                         if not tcid:
                             continue
                         tool_cache_set(session_key, tcid, selected_model, tname)
-                        cached_count += 1
                     if streamed_tool_names:
                         logger.info(f"[tool-calls] {sorted(streamed_tool_names)}")
 
@@ -698,24 +663,6 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                     logged_stream(), media_type="text/event-stream"
                 )
             else:
-                # Log non-streaming response
-                latency_ms = (time.monotonic() - start_time) * 1000
-                entry = usage_logger.build_entry(
-                    request_id=response.get("id", "unknown"),
-                    model_requested=request.model,
-                    model_selected=selected_model,
-                    messages=messages,
-                    response_content=response["choices"][0]["message"]["content"],
-                    usage=response.get("usage"),
-                    model_input_price=model_config.input_price,
-                    model_output_price=model_config.output_price,
-                    stream=False,
-                    temperature=request.temperature,
-                    latency_ms=latency_ms,
-                    routing_response=routing_response,
-                    compression_stats=compression_stats,
-                )
-                usage_logger.log(entry)
                 tool_calls = (
                     response.get("choices", [{}])[0]
                     .get("message", {})
