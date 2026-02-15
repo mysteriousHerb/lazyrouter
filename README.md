@@ -1,5 +1,7 @@
 # LazyRouter
 
+[English](README.md) | [中文](README_CN.md)
+
 <p align="center">
   <img src="assets/lazyrouter_logo.png" alt="LazyRouter Logo" width="280"/>
 </p>
@@ -123,6 +125,38 @@ curl -X POST http://localhost:1234/v1/chat/completions \
 - `GET /v1/health-status`
 - `GET /v1/benchmark`
 - `POST /v1/chat/completions`
+
+## Technical Implementation
+
+LazyRouter uses a lightweight LLM-based routing architecture:
+
+```text
+┌─────────────────┐     ┌──────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│  Client Request │────▶│  Router Model    │────▶│ Context Trimming │────▶│  LLM Provider   │
+│  (model: auto)  │     │  (cheap & fast)  │     │  (token control) │     │  (via LiteLLM)  │
+└─────────────────┘     └──────────────────┘     └──────────────────┘     └─────────────────┘
+                               │                                                   │
+                               │ selects best model                                │
+                               ▼                                                   ▼
+                        ┌──────────────────┐                              ┌─────────────────┐
+                        │ OpenAI/Anthropic │                              │    Response     │
+                        │ Gemini/Custom    │                              │   to Client     │
+                        └──────────────────┘                              └─────────────────┘
+```
+
+Key components:
+
+- **LLMRouter** (`router.py`): Uses a cheap/fast model (e.g., GPT-4o-mini, Gemini Flash) to analyze requests and select the optimal model based on Elo ratings, pricing, and task complexity. Returns structured JSON with reasoning.
+
+- **FastAPI Server** (`server.py`): OpenAI-compatible `/v1/chat/completions` endpoint with streaming support. Handles provider-specific message sanitization for Gemini/Anthropic.
+
+- **Context Compression** (`context_compressor.py`): Trims conversation history to control token usage in long agent sessions. Configurable via `max_history_tokens` and `keep_recent_exchanges`.
+
+- **Health Checker** (`health_checker.py`): Background task that periodically pings models and excludes unhealthy ones from routing decisions.
+
+- **Tool Cache** (`tool_cache.py`): Caches tool call IDs to model mappings per session, enabling router bypass on tool continuations for lower latency.
+
+- **LiteLLM Integration**: All provider calls go through LiteLLM with `drop_params=True` for automatic compatibility handling across OpenAI, Anthropic, and Gemini APIs.
 
 ## Development
 
