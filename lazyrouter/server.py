@@ -120,11 +120,12 @@ def _get_first_response_message(response: Dict[str, Any]) -> Dict[str, Any] | No
     return message
 
 
-def create_app(config_path: str = "config.yaml") -> FastAPI:
+def create_app(config_path: str = "config.yaml", env_file: str | None = None) -> FastAPI:
     """Create and configure FastAPI application
 
     Args:
         config_path: Path to configuration file
+        env_file: Optional path to dotenv file
 
     Returns:
         Configured FastAPI app
@@ -133,7 +134,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
 
     # Load configuration
     try:
-        config = load_config(config_path)
+        config = load_config(config_path, env_file=env_file)
         logger.info(f"Loaded configuration from {config_path}")
     except Exception as e:
         logger.error(f"Failed to load configuration: {e}")
