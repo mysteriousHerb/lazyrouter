@@ -350,7 +350,6 @@ def create_app(
             routing_result = None
             router_skipped_reason = None
             if resolved_model == "auto":
-            if resolved_model == "auto":
                 selected_model = None
 
                 # Check for healthy models with backoff retry until next health check
