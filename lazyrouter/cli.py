@@ -91,5 +91,7 @@ def main():
             factory=True,
         )
     else:
-        app = create_app(args.config, env_file=args.env_file)
+        app = create_app(
+            args.config, env_file=args.env_file, preloaded_config=config
+        )
         uvicorn.run(app, host=host, port=port)

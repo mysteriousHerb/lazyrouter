@@ -2,6 +2,7 @@
 
 import os
 import re
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import yaml
@@ -170,16 +171,13 @@ def load_config(
     """
     # Load environment variables from env file (or default .env if present)
     if env_file:
-        if not os.path.exists(env_file):
+        expanded_env_file = Path(env_file).expanduser()
+        if not expanded_env_file.exists():
             raise FileNotFoundError(f"Environment file not found: {env_file}")
-        load_dotenv(dotenv_path=env_file)
+        load_dotenv(dotenv_path=str(expanded_env_file))
     else:
         # Prefer searching from current working directory for uvx/local runs.
-        cwd_env_file = find_dotenv(usecwd=True)
-        if cwd_env_file:
-            load_dotenv(dotenv_path=cwd_env_file)
-        else:
-            load_dotenv()
+        load_dotenv(dotenv_path=find_dotenv(usecwd=True))
 
     # Load YAML file
     if not os.path.exists(config_path):
