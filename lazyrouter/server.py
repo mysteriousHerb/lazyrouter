@@ -66,6 +66,27 @@ usage_logger: UsageLogger = None
 health_checker: HealthChecker = None
 
 
+def _normalize_requested_model(model_name: str, available_models: Dict[str, Any]) -> str:
+    """Normalize provider-prefixed model ids (e.g. lazyrouter/auto)."""
+    normalized = (model_name or "").strip()
+    if not normalized:
+        return normalized
+
+    if normalized.lower() == "auto":
+        return "auto"
+
+    # Accept namespaced model ids used by some OpenAI-compatible clients,
+    # e.g. "lazyrouter/auto" or "provider/model-name".
+    if "/" in normalized:
+        suffix = normalized.rsplit("/", 1)[-1].strip()
+        if suffix.lower() == "auto":
+            return "auto"
+        if suffix in available_models and normalized not in available_models:
+            return suffix
+
+    return normalized
+
+
 def create_app(config_path: str = "config.yaml") -> FastAPI:
     """Create and configure FastAPI application
 
@@ -205,9 +226,12 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                 if is_tool_continuation_turn
                 else ""
             )
+            requested_model = request.model
+            resolved_model = _normalize_requested_model(requested_model, config.llms)
             logger.debug(
-                "[request] model=%s session=%s user=%s%s",
-                request.model,
+                "[request] model=%s resolved_model=%s session=%s user=%s%s",
+                requested_model,
+                resolved_model,
                 session_key or "no-session",
                 last_user_text,
                 tool_suffix,
@@ -258,7 +282,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             routing_response = None
             routing_result = None
             router_skipped_reason = None
-            if request.model == "auto":
+            if resolved_model == "auto":
                 selected_model = None
                 if (
                     config.health_check.enabled
@@ -317,7 +341,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                     routing_reasoning = routing_result.reasoning
             else:
                 # Use specified model
-                selected_model = request.model
+                selected_model = resolved_model
                 logger.info(f"Using specified model: {selected_model}")
 
             # Get model config for selected model (shared validation for auto + specified paths).

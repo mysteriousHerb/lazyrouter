@@ -10,32 +10,57 @@ All requests are logged to JSONL files for test fixture generation.
 Loads provider config from config.yaml (same as LazyRouter).
 """
 
+import argparse
 import json
 import logging
-import os
 import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import unquote
 
 import httpx
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
 from lazyrouter.config import Config, load_config
 
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
 # Global config - loaded at startup
 config: Optional[Config] = None
+APP_CONFIG_PATH = "config.yaml"
+LOG_DIR = Path("logs/test_proxy")
 
-LOG_DIR = Path(os.getenv("TEST_PROXY_LOG_DIR", "logs/test_proxy"))
-LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+def configure_log_dir(log_dir: str) -> None:
+    """Configure log output directory."""
+    global LOG_DIR
+    LOG_DIR = Path(log_dir)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+configure_log_dir(str(LOG_DIR))
+
+
+def normalize_requested_model(model_name: str) -> str:
+    """Normalize provider-prefixed model ids (e.g. lazyrouter/auto)."""
+    normalized = (model_name or "").strip()
+    if not normalized:
+        return normalized
+    if normalized.lower() == "auto":
+        return "auto"
+    if "/" in normalized:
+        suffix = normalized.rsplit("/", 1)[-1].strip()
+        if suffix.lower() == "auto":
+            return "auto"
+        if config is not None and suffix in config.llms and normalized not in config.llms:
+            return suffix
+    return normalized
 
 
 def get_provider_config(api_style: str) -> tuple[str, Optional[str], str]:
@@ -47,27 +72,74 @@ def get_provider_config(api_style: str) -> tuple[str, Optional[str], str]:
         if prov.api_style.lower() == api_style.lower():
             return prov.api_key, prov.base_url, prov.api_style
         # Also match "openai-completions" style
-        if api_style == "openai" and prov.api_style.lower() in ("openai", "openai-completions"):
+        if api_style == "openai" and prov.api_style.lower() in (
+            "openai",
+            "openai-completions",
+            "openai-responses",
+        ):
             return prov.api_key, prov.base_url, prov.api_style
 
     raise ValueError(f"No provider found with api_style={api_style}")
 
 
-def get_provider_for_model(model_name: str) -> tuple[str, Optional[str], str]:
-    """Get API key, base URL, and api_style for a model by looking up in llms config.
+def api_style_matches(preferred_api_style: str, provider_api_style: str) -> bool:
+    """Check whether a provider style can serve a preferred endpoint style."""
+    preferred = preferred_api_style.lower().strip()
+    provider_style = provider_api_style.lower().strip()
+    if preferred == "openai":
+        return provider_style in ("openai", "openai-completions", "openai-responses")
+    return provider_style == preferred
+
+
+def get_provider_for_model(
+    model_name: str,
+    preferred_api_style: Optional[str] = None,
+    require_preferred_style: bool = False,
+) -> tuple[str, Optional[str], str, str]:
+    """Get API key, base URL, api_style, and actual model name for a model.
 
     Looks up model -> provider -> api_style, then finds first provider with that style.
-    Returns: (api_key, base_url, api_style)
+    Returns: (api_key, base_url, api_style, actual_model_name)
     """
     if config is None:
         raise RuntimeError("Config not loaded")
 
+    model_name = normalize_requested_model(model_name)
+
+    # Handle "auto" - prefer model with matching style for the incoming endpoint.
+    if model_name.lower() == "auto" and config.llms:
+        if preferred_api_style:
+            for llm_key, llm_config in config.llms.items():
+                provider_name = llm_config.provider
+                if provider_name not in config.providers:
+                    continue
+                provider_style = config.providers[provider_name].api_style
+                if api_style_matches(preferred_api_style, provider_style):
+                    api_key, base_url, api_style = get_provider_config(provider_style)
+                    return api_key, base_url, api_style, llm_config.model
+            if require_preferred_style:
+                raise ValueError(
+                    f"No model configured for api_style='{preferred_api_style}'"
+                )
+
+        # Fallback: first model in config.
+        first_llm_key = next(iter(config.llms))
+        first_llm = config.llms[first_llm_key]
+        provider_name = first_llm.provider
+        if provider_name in config.providers:
+            prov = config.providers[provider_name]
+            api_key, base_url, api_style = get_provider_config(prov.api_style)
+            return api_key, base_url, api_style, first_llm.model
+
     # Find the model's provider and its api_style
     target_api_style = None
+    actual_model = model_name
 
     # Check if model_name matches a configured LLM key
     if model_name in config.llms:
-        provider_name = config.llms[model_name].provider
+        llm_config = config.llms[model_name]
+        provider_name = llm_config.provider
+        actual_model = llm_config.model  # Use the actual model string
         if provider_name in config.providers:
             target_api_style = config.providers[provider_name].api_style
 
@@ -82,16 +154,55 @@ def get_provider_for_model(model_name: str) -> tuple[str, Optional[str], str]:
 
     # If we found the api_style, get first provider with that style
     if target_api_style:
-        return get_provider_config(target_api_style)
+        if (
+            preferred_api_style
+            and require_preferred_style
+            and not api_style_matches(preferred_api_style, target_api_style)
+        ):
+            raise ValueError(
+                f"Model '{model_name}' uses api_style='{target_api_style}' and does not match required api_style='{preferred_api_style}'"
+            )
+        api_key, base_url, api_style = get_provider_config(target_api_style)
+        return api_key, base_url, api_style, actual_model
 
     # Final fallback: guess by model name prefix
+    if preferred_api_style:
+        api_key, base_url, api_style = get_provider_config(preferred_api_style)
+        return api_key, base_url, api_style, actual_model
+
     model_lower = model_name.lower()
     if "claude" in model_lower:
-        return get_provider_config("anthropic")
+        api_key, base_url, api_style = get_provider_config("anthropic")
     elif "gemini" in model_lower:
-        return get_provider_config("gemini")
+        api_key, base_url, api_style = get_provider_config("gemini")
     else:
-        return get_provider_config("openai")
+        api_key, base_url, api_style = get_provider_config("openai")
+    return api_key, base_url, api_style, actual_model
+
+
+def resolve_gemini_model_path(path: str) -> tuple[str, Optional[str]]:
+    """Resolve Gemini path model aliases (e.g. models/auto:streamGenerateContent)."""
+    normalized_path = unquote((path or "").lstrip("/"))
+    for prefix in ("models/", "v1beta/models/"):
+        if not normalized_path.startswith(prefix):
+            continue
+
+        tail = normalized_path[len(prefix) :]
+        model_token, sep, operation = tail.partition(":")
+        if not model_token:
+            return normalized_path, None
+
+        normalized_model = normalize_requested_model(model_token)
+        _, _, _, actual_model = get_provider_for_model(
+            normalized_model,
+            preferred_api_style="gemini",
+            require_preferred_style=True,
+        )
+
+        rebuilt_tail = f"{actual_model}:{operation}" if sep else actual_model
+        return f"{prefix}{rebuilt_tail}", actual_model
+
+    return normalized_path, None
 
 
 def get_log_path(api_style: str) -> Path:
@@ -129,7 +240,11 @@ def log_exchange(
 
     logger.info(
         "[logged] api=%s id=%s stream=%s latency=%.0fms path=%s",
-        api_style, request_id[:8], is_stream, latency_ms, log_path.name
+        api_style,
+        request_id[:8],
+        is_stream,
+        latency_ms,
+        log_path.name,
     )
 
 
@@ -143,9 +258,9 @@ app = FastAPI(
 @app.on_event("startup")
 async def startup():
     global config
-    config_path = os.getenv("CONFIG_PATH", "config.yaml")
-    config = load_config(config_path)
-    logger.info(f"Loaded config from {config_path}")
+    if config is None:
+        config = load_config(APP_CONFIG_PATH)
+    logger.info(f"Loaded config from {APP_CONFIG_PATH}")
     logger.info(f"Available providers: {list(config.providers.keys())}")
 
 
@@ -159,6 +274,7 @@ async def health():
 # OpenAI Format Endpoint
 # =============================================================================
 
+
 @app.post("/v1/chat/completions")
 @app.post("/openai/v1/chat/completions")
 async def openai_chat_completions(request: Request):
@@ -170,9 +286,19 @@ async def openai_chat_completions(request: Request):
     is_stream = body.get("stream", False)
     model_name = body.get("model", "")
 
-    # Route by model name
-    api_key, base_url, api_style = get_provider_for_model(model_name)
+    # Route by model name (returns actual model if "auto")
+    try:
+        api_key, base_url, api_style, actual_model = get_provider_for_model(
+            model_name,
+            preferred_api_style="openai",
+            require_preferred_style=True,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     base_url = base_url or "https://api.openai.com"
+
+    # Replace model in body with actual model name
+    body["model"] = actual_model
 
     req_headers = {
         "Content-Type": "application/json",
@@ -180,42 +306,171 @@ async def openai_chat_completions(request: Request):
     }
 
     incoming_headers = {
-        k: v for k, v in request.headers.items()
+        k: v
+        for k, v in request.headers.items()
         if k.lower() not in ("authorization", "x-api-key")
     }
 
     logger.info(
         "[openai] request id=%s model=%s provider_style=%s stream=%s messages=%d",
-        request_id[:8], model_name, api_style, is_stream, len(body.get("messages", []))
+        request_id[:8],
+        model_name,
+        api_style,
+        is_stream,
+        len(body.get("messages", [])),
     )
+
+    url = f"{base_url.rstrip('/')}/v1/chat/completions"
+    if is_stream:
+        return await _proxy_stream(
+            url=url,
+            headers=req_headers,
+            body=body,
+            api_style="openai_completions",
+            request_id=request_id,
+            start_time=start_time,
+            incoming_headers=incoming_headers,
+        )
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         try:
-            url = f"{base_url.rstrip('/')}/v1/chat/completions"
-            if is_stream:
-                return await _proxy_stream(
-                    client=client, url=url, headers=req_headers, body=body,
-                    api_style="openai", request_id=request_id,
-                    start_time=start_time, incoming_headers=incoming_headers,
-                )
-            else:
-                resp = await client.post(url, headers=req_headers, json=body)
-                latency_ms = (time.monotonic() - start_time) * 1000
-                response_data = resp.json()
-                log_exchange("openai", request_id, body, response_data,
-                           latency_ms, False, request_headers=incoming_headers)
-                return Response(content=resp.content, status_code=resp.status_code,
-                              headers=dict(resp.headers))
+            resp = await client.post(url, headers=req_headers, json=body)
+            latency_ms = (time.monotonic() - start_time) * 1000
+            response_data = resp.json()
+            log_exchange(
+                "openai_completions",
+                request_id,
+                body,
+                response_data,
+                latency_ms,
+                False,
+                request_headers=incoming_headers,
+            )
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                headers=dict(resp.headers),
+            )
         except Exception as e:
             latency_ms = (time.monotonic() - start_time) * 1000
-            log_exchange("openai", request_id, body, None, latency_ms,
-                        is_stream, error=str(e), request_headers=incoming_headers)
+            log_exchange(
+                "openai_completions",
+                request_id,
+                body,
+                None,
+                latency_ms,
+                is_stream,
+                error=str(e),
+                request_headers=incoming_headers,
+            )
+            raise
+
+
+@app.post("/v1/responses")
+@app.post("/openai/v1/responses")
+async def openai_responses(request: Request):
+    """Proxy OpenAI Responses API requests. Routes by model name."""
+    request_id = str(uuid.uuid4())
+    start_time = time.monotonic()
+
+    body = await request.json()
+    is_stream = body.get("stream", False)
+    model_name = body.get("model", "")
+
+    try:
+        api_key, base_url, api_style, actual_model = get_provider_for_model(
+            model_name,
+            preferred_api_style="openai",
+            require_preferred_style=True,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    base_url = base_url or "https://api.openai.com"
+
+    # Replace model in body with actual model name
+    body["model"] = actual_model
+
+    req_headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+
+    incoming_headers = {
+        k: v
+        for k, v in request.headers.items()
+        if k.lower() not in ("authorization", "x-api-key")
+    }
+
+    input_field = body.get("input")
+    if isinstance(input_field, list):
+        input_items = len(input_field)
+    elif input_field is None:
+        input_items = 0
+    else:
+        input_items = 1
+
+    logger.info(
+        "[responses] request id=%s model=%s provider_style=%s stream=%s input_items=%d",
+        request_id[:8],
+        model_name,
+        api_style,
+        is_stream,
+        input_items,
+    )
+
+    url = f"{base_url.rstrip('/')}/v1/responses"
+    if is_stream:
+        return await _proxy_stream(
+            url=url,
+            headers=req_headers,
+            body=body,
+            api_style="openai_responses",
+            request_id=request_id,
+            start_time=start_time,
+            incoming_headers=incoming_headers,
+        )
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        try:
+            resp = await client.post(url, headers=req_headers, json=body)
+            latency_ms = (time.monotonic() - start_time) * 1000
+            try:
+                response_data = resp.json()
+            except Exception:
+                response_data = resp.text
+            log_exchange(
+                "openai_responses",
+                request_id,
+                body,
+                response_data,
+                latency_ms,
+                False,
+                request_headers=incoming_headers,
+            )
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                headers=dict(resp.headers),
+            )
+        except Exception as e:
+            latency_ms = (time.monotonic() - start_time) * 1000
+            log_exchange(
+                "openai_responses",
+                request_id,
+                body,
+                None,
+                latency_ms,
+                is_stream,
+                error=str(e),
+                request_headers=incoming_headers,
+            )
             raise
 
 
 # =============================================================================
 # Anthropic Format Endpoint
 # =============================================================================
+
 
 @app.post("/v1/messages")
 @app.post("/anthropic/v1/messages")
@@ -228,9 +483,19 @@ async def anthropic_messages(request: Request):
     is_stream = body.get("stream", False)
     model_name = body.get("model", "")
 
-    # Route by model name
-    api_key, base_url, api_style = get_provider_for_model(model_name)
+    # Route by model name (returns actual model if "auto")
+    try:
+        api_key, base_url, api_style, actual_model = get_provider_for_model(
+            model_name,
+            preferred_api_style="anthropic",
+            require_preferred_style=True,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     base_url = base_url or "https://api.anthropic.com"
+
+    # Replace model in body with actual model name
+    body["model"] = actual_model
 
     req_headers = {
         "Content-Type": "application/json",
@@ -239,36 +504,64 @@ async def anthropic_messages(request: Request):
     }
 
     incoming_headers = {
-        k: v for k, v in request.headers.items()
+        k: v
+        for k, v in request.headers.items()
         if k.lower() not in ("authorization", "x-api-key")
     }
 
     logger.info(
-        "[anthropic] request id=%s model=%s provider_style=%s stream=%s messages=%d",
-        request_id[:8], model_name, api_style, is_stream, len(body.get("messages", []))
+        "[anthropic] request id=%s model=%s->%s provider_style=%s stream=%s messages=%d",
+        request_id[:8],
+        model_name,
+        actual_model,
+        api_style,
+        is_stream,
+        len(body.get("messages", [])),
     )
+
+    url = f"{base_url.rstrip('/')}/v1/messages"
+    if is_stream:
+        return await _proxy_stream(
+            url=url,
+            headers=req_headers,
+            body=body,
+            api_style="anthropic",
+            request_id=request_id,
+            start_time=start_time,
+            incoming_headers=incoming_headers,
+        )
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         try:
-            url = f"{base_url.rstrip('/')}/v1/messages"
-            if is_stream:
-                return await _proxy_stream(
-                    client=client, url=url, headers=req_headers, body=body,
-                    api_style="anthropic", request_id=request_id,
-                    start_time=start_time, incoming_headers=incoming_headers,
-                )
-            else:
-                resp = await client.post(url, headers=req_headers, json=body)
-                latency_ms = (time.monotonic() - start_time) * 1000
-                response_data = resp.json()
-                log_exchange("anthropic", request_id, body, response_data,
-                           latency_ms, False, request_headers=incoming_headers)
-                return Response(content=resp.content, status_code=resp.status_code,
-                              headers=dict(resp.headers))
+            resp = await client.post(url, headers=req_headers, json=body)
+            latency_ms = (time.monotonic() - start_time) * 1000
+            response_data = resp.json()
+            log_exchange(
+                "anthropic",
+                request_id,
+                body,
+                response_data,
+                latency_ms,
+                False,
+                request_headers=incoming_headers,
+            )
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                headers=dict(resp.headers),
+            )
         except Exception as e:
             latency_ms = (time.monotonic() - start_time) * 1000
-            log_exchange("anthropic", request_id, body, None, latency_ms,
-                        is_stream, error=str(e), request_headers=incoming_headers)
+            log_exchange(
+                "anthropic",
+                request_id,
+                body,
+                None,
+                latency_ms,
+                is_stream,
+                error=str(e),
+                request_headers=incoming_headers,
+            )
             raise
 
 
@@ -278,8 +571,11 @@ async def anthropic_messages(request: Request):
 
 GEMINI_DEFAULT_BASE = "https://generativelanguage.googleapis.com"
 
+
 @app.api_route("/v1/gemini/{path:path}", methods=["GET", "POST"])
 @app.api_route("/gemini/{path:path}", methods=["GET", "POST"])
+@app.api_route("/models/{path:path}", methods=["GET", "POST"])
+@app.api_route("/v1beta/models/{path:path}", methods=["GET", "POST"])
 async def gemini_proxy(request: Request, path: str):
     """Proxy Gemini API requests."""
     request_id = str(uuid.uuid4())
@@ -288,35 +584,75 @@ async def gemini_proxy(request: Request, path: str):
     api_key, base_url, _ = get_provider_config("gemini")
     base_url = base_url or GEMINI_DEFAULT_BASE
 
-    target_url = f"{base_url.rstrip('/')}/{path}"
+    request_path = request.url.path
+    if request_path.startswith("/models/"):
+        path = f"models/{path}"
+    elif request_path.startswith("/v1beta/models/"):
+        path = f"v1beta/models/{path}"
+
+    try:
+        resolved_path, resolved_model = resolve_gemini_model_path(path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    upstream_path = (
+        f"v1beta/{resolved_path}"
+        if resolved_path.startswith("models/")
+        else resolved_path
+    )
+
+    target_url = f"{base_url.rstrip('/')}/{upstream_path}"
+    if request.url.query:
+        target_url = f"{target_url}?{request.url.query}"
     if api_key:
         separator = "&" if "?" in target_url else "?"
         target_url = f"{target_url}{separator}key={api_key}"
 
     body = None
-    is_stream = "streamGenerateContent" in path
+    is_stream = "streamGenerateContent" in resolved_path
+    wants_sse = request.query_params.get("alt", "").lower() == "sse"
 
     incoming_headers = {
-        k: v for k, v in request.headers.items()
+        k: v
+        for k, v in request.headers.items()
         if k.lower() not in ("authorization", "x-api-key", "host")
     }
     req_headers = {"Content-Type": "application/json"}
 
     if request.method == "POST":
         body = await request.json()
-        logger.info("[gemini] request id=%s path=%s stream=%s",
-                   request_id[:8], path, is_stream)
+        logger.info(
+            "[gemini] request id=%s path=%s resolved_path=%s upstream_path=%s model=%s stream=%s",
+            request_id[:8],
+            path,
+            resolved_path,
+            upstream_path,
+            resolved_model or "-",
+            is_stream,
+        )
+
+    if is_stream and request.method == "POST":
+        return await _proxy_stream(
+            url=target_url,
+            headers=req_headers,
+            body=body,
+            request_data={
+                "path": path,
+                "resolved_path": resolved_path,
+                "upstream_path": upstream_path,
+                "resolved_model": resolved_model,
+                "body": body,
+            },
+            api_style="gemini",
+            request_id=request_id,
+            start_time=start_time,
+            incoming_headers=incoming_headers,
+            stream_format="sse" if wants_sse else "gemini",
+        )
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         try:
-            if is_stream and request.method == "POST":
-                return await _proxy_stream(
-                    client=client, url=target_url, headers=req_headers, body=body,
-                    api_style="gemini", request_id=request_id,
-                    start_time=start_time, incoming_headers=incoming_headers,
-                    stream_format="gemini",
-                )
-            elif request.method == "POST":
+            if request.method == "POST":
                 resp = await client.post(target_url, headers=req_headers, json=body)
             else:
                 resp = await client.get(target_url, headers=req_headers)
@@ -327,21 +663,51 @@ async def gemini_proxy(request: Request, path: str):
             except Exception:
                 response_data = resp.text
 
-            log_exchange("gemini", request_id, {"path": path, "body": body},
-                        response_data, latency_ms, False, request_headers=incoming_headers)
-            return Response(content=resp.content, status_code=resp.status_code,
-                          headers=dict(resp.headers))
+            log_exchange(
+                "gemini",
+                request_id,
+                {
+                    "path": path,
+                    "resolved_path": resolved_path,
+                    "upstream_path": upstream_path,
+                    "resolved_model": resolved_model,
+                    "body": body,
+                },
+                response_data,
+                latency_ms,
+                False,
+                request_headers=incoming_headers,
+            )
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                headers=dict(resp.headers),
+            )
         except Exception as e:
             latency_ms = (time.monotonic() - start_time) * 1000
-            log_exchange("gemini", request_id, {"path": path, "body": body},
-                        None, latency_ms, is_stream, error=str(e),
-                        request_headers=incoming_headers)
+            log_exchange(
+                "gemini",
+                request_id,
+                {
+                    "path": path,
+                    "resolved_path": resolved_path,
+                    "upstream_path": upstream_path,
+                    "resolved_model": resolved_model,
+                    "body": body,
+                },
+                None,
+                latency_ms,
+                is_stream,
+                error=str(e),
+                request_headers=incoming_headers,
+            )
             raise
 
 
 # =============================================================================
 # Test Endpoints - Quick validation for each API style
 # =============================================================================
+
 
 @app.get("/test/openai")
 async def test_openai():
@@ -352,11 +718,21 @@ async def test_openai():
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(
             f"{base_url.rstrip('/')}/v1/chat/completions",
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-            json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "Say 'test ok'"}], "max_tokens": 10},
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "Say 'test ok'"}],
+                "max_tokens": 10,
+            },
         )
-        return {"status": "ok" if resp.status_code == 200 else "error",
-                "status_code": resp.status_code, "response": resp.json()}
+        return {
+            "status": "ok" if resp.status_code == 200 else "error",
+            "status_code": resp.status_code,
+            "response": resp.json(),
+        }
 
 
 @app.get("/test/anthropic")
@@ -368,11 +744,22 @@ async def test_anthropic():
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(
             f"{base_url.rstrip('/')}/v1/messages",
-            headers={"Content-Type": "application/json", "x-api-key": api_key, "anthropic-version": "2023-06-01"},
-            json={"model": "claude-3-haiku-20240307", "messages": [{"role": "user", "content": "Say 'test ok'"}], "max_tokens": 10},
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+            },
+            json={
+                "model": "claude-3-haiku-20240307",
+                "messages": [{"role": "user", "content": "Say 'test ok'"}],
+                "max_tokens": 10,
+            },
         )
-        return {"status": "ok" if resp.status_code == 200 else "error",
-                "status_code": resp.status_code, "response": resp.json()}
+        return {
+            "status": "ok" if resp.status_code == 200 else "error",
+            "status_code": resp.status_code,
+            "response": resp.json(),
+        }
 
 
 @app.get("/test/gemini")
@@ -389,16 +776,19 @@ async def test_gemini():
             headers={"Content-Type": "application/json"},
             json={"contents": [{"parts": [{"text": "Say 'test ok'"}]}]},
         )
-        return {"status": "ok" if resp.status_code == 200 else "error",
-                "status_code": resp.status_code, "response": resp.json()}
+        return {
+            "status": "ok" if resp.status_code == 200 else "error",
+            "status_code": resp.status_code,
+            "response": resp.json(),
+        }
 
 
 # =============================================================================
 # Streaming Helper
 # =============================================================================
 
+
 async def _proxy_stream(
-    client: httpx.AsyncClient,
     url: str,
     headers: Dict[str, str],
     body: Dict[str, Any],
@@ -407,6 +797,7 @@ async def _proxy_stream(
     start_time: float,
     incoming_headers: Dict[str, str],
     stream_format: str = "sse",
+    request_data: Optional[Dict[str, Any]] = None,
 ) -> StreamingResponse:
     """Proxy a streaming request and log all chunks."""
     collected_chunks = []
@@ -414,19 +805,34 @@ async def _proxy_stream(
     async def stream_generator():
         nonlocal collected_chunks
         try:
-            async with client.stream("POST", url, headers=headers, json=body) as resp:
-                async for chunk in resp.aiter_bytes():
-                    collected_chunks.append(chunk.decode("utf-8", errors="replace"))
-                    yield chunk
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                async with client.stream("POST", url, headers=headers, json=body) as resp:
+                    async for chunk in resp.aiter_bytes():
+                        collected_chunks.append(chunk.decode("utf-8", errors="replace"))
+                        yield chunk
 
-                latency_ms = (time.monotonic() - start_time) * 1000
-                log_exchange(api_style, request_id, body, {"chunks": collected_chunks},
-                           latency_ms, True, request_headers=incoming_headers)
+                    latency_ms = (time.monotonic() - start_time) * 1000
+                    log_exchange(
+                        api_style,
+                        request_id,
+                        request_data if request_data is not None else body,
+                        {"chunks": collected_chunks},
+                        latency_ms,
+                        True,
+                        request_headers=incoming_headers,
+                    )
         except Exception as e:
             latency_ms = (time.monotonic() - start_time) * 1000
-            log_exchange(api_style, request_id, body,
-                        {"chunks": collected_chunks, "error": str(e)},
-                        latency_ms, True, error=str(e), request_headers=incoming_headers)
+            log_exchange(
+                api_style,
+                request_id,
+                request_data if request_data is not None else body,
+                {"chunks": collected_chunks, "error": str(e)},
+                latency_ms,
+                True,
+                error=str(e),
+                request_headers=incoming_headers,
+            )
             raise
 
     media_type = "text/event-stream" if stream_format == "sse" else "application/json"
@@ -437,16 +843,54 @@ async def _proxy_stream(
 # Main Entry Point
 # =============================================================================
 
-def create_app(config_path: str = "config.yaml") -> FastAPI:
+
+def create_app(config_path: str = "config.yaml", log_dir: str = "logs/test_proxy") -> FastAPI:
     """Return the FastAPI app instance with config loaded."""
-    global config
+    global APP_CONFIG_PATH, config
+    APP_CONFIG_PATH = config_path
+    configure_log_dir(log_dir)
     config = load_config(config_path)
     return app
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Main entry point for test proxy CLI."""
+    parser = argparse.ArgumentParser(
+        description="Test proxy for capturing provider request/response payloads"
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="config.yaml",
+        help="Path to configuration file (default: config.yaml)",
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default="0.0.0.0",
+        help="Host to bind to (default: 0.0.0.0)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=4321,
+        help="Port to bind to (default: 4321)",
+    )
+    parser.add_argument(
+        "--log-dir",
+        type=str,
+        default="logs/test_proxy",
+        help="Directory for JSONL logs (default: logs/test_proxy)",
+    )
+    args = parser.parse_args()
+
     import uvicorn
-    port = int(os.getenv("TEST_PROXY_PORT", "8081"))
-    logger.info(f"Starting test proxy on port {port}")
+
+    proxy_app = create_app(args.config, args.log_dir)
+    logger.info(f"Starting test proxy on {args.host}:{args.port}")
     logger.info(f"Logs will be written to {LOG_DIR}")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(proxy_app, host=args.host, port=args.port)
+
+
+if __name__ == "__main__":
+    main()
