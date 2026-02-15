@@ -21,6 +21,7 @@ from typing import Any, Dict, Optional
 from urllib.parse import unquote
 
 import httpx
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 # Global config - loaded at startup
 config: Optional[Config] = None
 APP_CONFIG_PATH = "config.yaml"
+APP_ENV_FILE = ".env"
 LOG_DIR = Path("logs/test_proxy")
 
 
@@ -45,6 +47,12 @@ def configure_log_dir(log_dir: str) -> None:
 
 
 configure_log_dir(str(LOG_DIR))
+
+
+def load_proxy_config(config_path: str, env_file: str) -> Config:
+    """Load env file first, then load LazyRouter config."""
+    load_dotenv(env_file, override=True)
+    return load_config(config_path)
 
 
 def normalize_requested_model(model_name: str) -> str:
@@ -259,7 +267,7 @@ app = FastAPI(
 async def startup():
     global config
     if config is None:
-        config = load_config(APP_CONFIG_PATH)
+        config = load_proxy_config(APP_CONFIG_PATH, APP_ENV_FILE)
     logger.info(f"Loaded config from {APP_CONFIG_PATH}")
     logger.info(f"Available providers: {list(config.providers.keys())}")
 
@@ -844,12 +852,17 @@ async def _proxy_stream(
 # =============================================================================
 
 
-def create_app(config_path: str = "config.yaml", log_dir: str = "logs/test_proxy") -> FastAPI:
+def create_app(
+    config_path: str = "config.yaml",
+    log_dir: str = "logs/test_proxy",
+    env_file: str = ".env",
+) -> FastAPI:
     """Return the FastAPI app instance with config loaded."""
-    global APP_CONFIG_PATH, config
+    global APP_CONFIG_PATH, APP_ENV_FILE, config
     APP_CONFIG_PATH = config_path
+    APP_ENV_FILE = env_file
     configure_log_dir(log_dir)
-    config = load_config(config_path)
+    config = load_proxy_config(config_path, env_file)
     return app
 
 
@@ -863,6 +876,12 @@ def main() -> None:
         type=str,
         default="config.yaml",
         help="Path to configuration file (default: config.yaml)",
+    )
+    parser.add_argument(
+        "--env-file",
+        type=str,
+        default=".env",
+        help="Path to dotenv file (default: .env)",
     )
     parser.add_argument(
         "--host",
@@ -886,7 +905,7 @@ def main() -> None:
 
     import uvicorn
 
-    proxy_app = create_app(args.config, args.log_dir)
+    proxy_app = create_app(args.config, args.log_dir, args.env_file)
     logger.info(f"Starting test proxy on {args.host}:{args.port}")
     logger.info(f"Logs will be written to {LOG_DIR}")
     uvicorn.run(proxy_app, host=args.host, port=args.port)

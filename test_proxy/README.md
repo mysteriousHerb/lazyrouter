@@ -22,7 +22,7 @@ Lightweight FastAPI proxy for capturing incoming/outgoing payloads across provid
 From repo root:
 
 ```powershell
-uv run python test_proxy/proxy.py --config config.yaml --port 4321
+uv run python test_proxy/proxy.py --config config.yaml --env-file .env --port 4321
 ```
 
 Equivalent (same default values):
@@ -34,6 +34,7 @@ uv run python test_proxy/proxy.py
 ## CLI Options
 
 - `--config`: config file path (default: `config.yaml`)
+- `--env-file`: dotenv file path (default: `.env`)
 - `--host`: bind host (default: `0.0.0.0`)
 - `--port`: bind port (default: `4321`)
 - `--log-dir`: log output directory (default: `logs/test_proxy`)
@@ -41,7 +42,7 @@ uv run python test_proxy/proxy.py
 Example:
 
 ```powershell
-uv run python test_proxy/proxy.py --config config.yaml --host 0.0.0.0 --port 8081 --log-dir logs/test_proxy
+uv run python test_proxy/proxy.py --config config.yaml --env-file .env --host 0.0.0.0 --port 8081 --log-dir logs/test_proxy
 ```
 
 ## Quick Checks
