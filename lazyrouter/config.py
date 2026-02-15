@@ -2,10 +2,11 @@
 
 import os
 import re
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import yaml
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 from pydantic import BaseModel, model_validator
 
 
@@ -96,12 +97,8 @@ class ContextCompressionConfig(BaseModel):
 class HealthCheckConfig(BaseModel):
     """Periodic health check settings"""
 
-    enabled: bool = False
     interval: int = 300  # seconds between checks
     max_latency_ms: int = 10000  # models slower than this are excluded
-    fail_open_when_all_unhealthy: bool = (
-        False  # if true, keep all models routable when all fail checks
-    )
 
 
 class Config(BaseModel):
@@ -115,16 +112,19 @@ class Config(BaseModel):
     health_check: HealthCheckConfig = HealthCheckConfig()
 
     def get_api_key(self, provider: str) -> str:
+        """Get API key for a provider."""
         if provider not in self.providers:
             raise ValueError(f"Provider '{provider}' not found in providers config")
         return self.providers[provider].api_key
 
     def get_base_url(self, provider: str) -> Optional[str]:
+        """Get base URL for a provider, if configured."""
         if provider not in self.providers:
             raise ValueError(f"Provider '{provider}' not found in providers config")
         return self.providers[provider].base_url
 
     def get_api_style(self, provider: str) -> str:
+        """Get API style (openai, anthropic, gemini) for a provider."""
         if provider not in self.providers:
             raise ValueError(f"Provider '{provider}' not found in providers config")
         return self.providers[provider].api_style
@@ -153,11 +153,14 @@ def substitute_env_vars(value: Any) -> Any:
         return value
 
 
-def load_config(config_path: str = "config.yaml") -> Config:
+def load_config(
+    config_path: str = "config.yaml", env_file: Optional[str] = None
+) -> Config:
     """Load and validate configuration from YAML file
 
     Args:
         config_path: Path to YAML configuration file
+        env_file: Optional path to dotenv file
 
     Returns:
         Validated Config object
@@ -166,8 +169,15 @@ def load_config(config_path: str = "config.yaml") -> Config:
         FileNotFoundError: If config file doesn't exist
         ValueError: If configuration is invalid
     """
-    # Load environment variables from .env file if it exists
-    load_dotenv()
+    # Load environment variables from env file (or default .env if present)
+    if env_file:
+        expanded_env_file = Path(env_file).expanduser()
+        if not expanded_env_file.exists():
+            raise FileNotFoundError(f"Environment file not found: {env_file}")
+        load_dotenv(dotenv_path=str(expanded_env_file))
+    else:
+        # Prefer searching from current working directory for uvx/local runs.
+        load_dotenv(dotenv_path=find_dotenv(usecwd=True))
 
     # Load YAML file
     if not os.path.exists(config_path):

@@ -1,5 +1,7 @@
 # LazyRouter
 
+[English](README.md) | [中文](README_CN.md)
+
 <p align="center">
   <img src="assets/lazyrouter_logo.png" alt="LazyRouter Logo" width="280"/>
 </p>
@@ -30,6 +32,8 @@ It also helps translate behavior across API styles (OpenAI, Gemini, and Anthropi
 - Built-in compatibility handling between OpenAI, Gemini, and Anthropic styles
 - Streaming and non-streaming response support
 - Health and benchmark endpoints for operational visibility
+- Automatic model fallback on rate limits or errors (tries ELO-similar models)
+- Exponential backoff retry when all models are temporarily unavailable
 
 ## Quick Start
 
@@ -41,6 +45,12 @@ It also helps translate behavior across API styles (OpenAI, Gemini, and Anthropi
 
 ```bash
 uvx --from git+https://github.com/mysteriousHerb/lazyrouter.git lazyrouter --config config.yaml
+```
+
+If you want to use a specific env file path, add:
+
+```bash
+uvx --from git+https://github.com/mysteriousHerb/lazyrouter.git lazyrouter --config config.yaml --env-file .env
 ```
 
 ### Option 2: Clone and run locally
@@ -118,11 +128,45 @@ curl -X POST http://localhost:1234/v1/chat/completions \
 
 ## API Endpoints
 
-- `GET /health`
-- `GET /v1/models`
-- `GET /v1/health-status`
-- `GET /v1/benchmark`
-- `POST /v1/chat/completions`
+- `GET /health` - Liveness check
+- `GET /v1/models` - List available models
+- `GET /v1/health-status` - Show cached health check results
+- `GET /v1/health-check` - Run health check now and return results
+- `POST /v1/chat/completions` - OpenAI-compatible chat endpoint
+
+## Technical Implementation
+
+LazyRouter uses a lightweight LLM-based routing architecture:
+
+```text
+┌─────────────────┐     ┌──────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│  Client Request │────▶│  Router Model    │────▶│ Context Trimming │────▶│  LLM Provider   │
+│  (model: auto)  │     │  (cheap & fast)  │     │  (token control) │     │  (via LiteLLM)  │
+└─────────────────┘     └──────────────────┘     └──────────────────┘     └─────────────────┘
+                               │                                                   │
+                               │ selects best model                                │
+                               ▼                                                   ▼
+                        ┌──────────────────┐                              ┌─────────────────┐
+                        │ OpenAI/Anthropic │                              │    Response     │
+                        │ Gemini/Custom    │                              │   to Client     │
+                        └──────────────────┘                              └─────────────────┘
+```
+
+Key components:
+
+- **LLMRouter** (`router.py`): Uses a cheap/fast model (e.g., GPT-4o-mini, Gemini Flash) to analyze requests and select the optimal model based on Elo ratings, pricing, and task complexity. Returns structured JSON with reasoning.
+
+- **FastAPI Server** (`server.py`): OpenAI-compatible `/v1/chat/completions` endpoint with streaming support. Handles provider-specific message sanitization for Gemini/Anthropic.
+
+- **Context Compression** (`context_compressor.py`): Trims conversation history to control token usage in long agent sessions. Configurable via `max_history_tokens` and `keep_recent_exchanges`.
+
+- **Health Checker** (`health_checker.py`): Background task that periodically pings models and excludes unhealthy ones from routing decisions.
+
+- **Retry Handler** (`retry_handler.py`): Automatic fallback to ELO-similar models on rate limits or errors. Exponential backoff retry when all models fail, tied to health check interval.
+
+- **Tool Cache** (`tool_cache.py`): Caches tool call IDs to model mappings per session, enabling router bypass on tool continuations for lower latency.
+
+- **LiteLLM Integration**: All provider calls go through LiteLLM with `drop_params=True` for automatic compatibility handling across OpenAI, Anthropic, and Gemini APIs.
 
 ## Development
 

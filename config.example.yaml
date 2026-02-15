@@ -5,7 +5,7 @@
 serve:
   host: "0.0.0.0"
   port: 1234
-  show_model_prefix: true
+  show_model_prefix: true  # Prepend assistant text with "[routed-model] ".
   debug: false
   # api_key: "set-an-internal-key-if-you-want-to-protect-the-router"
 
@@ -106,7 +106,5 @@ context_compression:
   skip_router_on_tool_results: true  # Reuse previous selected model on tool-result follow-ups.
 
 health_check:
-  enabled: true
-  interval: 1800
-  max_latency_ms: 15000
-  fail_open_when_all_unhealthy: false
+  interval: 1800        # seconds between checks (default: 300)
+  max_latency_ms: 15000  # models slower than this are unhealthy (default: 10000)

@@ -16,15 +16,15 @@ from .gemini_retries import (
     call_router_with_gemini_fallback,
     is_gemini_tool_type_proto_error,
 )
-from .health_checker import HealthChecker, bench_one
+from .health_checker import HealthChecker, check_model_health
 from .message_utils import (
     collect_trailing_tool_results,
     content_to_text,
     tool_call_name_by_id,
 )
 from .models import (
-    BenchmarkResponse,
-    BenchmarkResult,
+    HealthCheckResponse,
+    HealthCheckResult,
     ChatCompletionRequest,
     HealthResponse,
     HealthStatusResponse,
@@ -48,6 +48,13 @@ from .tool_cache import (
     tool_cache_clear_session,
     tool_cache_set,
 )
+from .retry_handler import (
+    is_retryable_error,
+    select_fallback_models,
+    INITIAL_RETRY_DELAY,
+    RETRY_MULTIPLIER,
+    MAX_FALLBACK_MODELS,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -70,11 +77,64 @@ def _configure_logging(debug: bool) -> None:
     logging.getLogger("lazyrouter").setLevel(level)
 
 
-def create_app(config_path: str = "config.yaml") -> FastAPI:
+def _model_prefix(selected_model: str) -> str:
+    """Return visible model prefix for assistant text responses."""
+    return f"[{selected_model}] "
+
+
+def _with_model_prefix_if_enabled(
+    content: Any, selected_model: str, show_model_prefix: bool
+) -> Any:
+    """Prepend model prefix to plain-text content when enabled."""
+    if not show_model_prefix or not isinstance(content, str):
+        return content
+
+    prefix = _model_prefix(selected_model)
+    if content.startswith(prefix):
+        return content
+    return f"{prefix}{content}"
+
+
+def _prefix_stream_delta_content_if_needed(
+    delta: Dict[str, Any], model_prefix: str, prefix_pending: bool
+) -> tuple[str, bool]:
+    """Prefix first streamed text delta and return updated content + pending flag."""
+    delta_content = delta.get("content", "")
+    if prefix_pending and "content" in delta and isinstance(delta_content, str):
+        if delta_content.startswith(model_prefix):
+            return delta_content, False
+        delta["content"] = model_prefix + delta_content
+        return delta["content"], False
+    return delta_content, prefix_pending
+
+
+def _get_first_response_message(response: Dict[str, Any]) -> Dict[str, Any] | None:
+    """Safely return first choice message dict from a non-streaming response."""
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        return None
+
+    message = first_choice.get("message")
+    if not isinstance(message, dict):
+        return None
+    return message
+
+
+def create_app(
+    config_path: str = "config.yaml",
+    env_file: str | None = None,
+    preloaded_config: Config | None = None,
+) -> FastAPI:
     """Create and configure FastAPI application
 
     Args:
         config_path: Path to configuration file
+        env_file: Optional path to dotenv file
+        preloaded_config: Preloaded config object to avoid re-parsing config
 
     Returns:
         Configured FastAPI app
@@ -82,13 +142,20 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
     global config, router, health_checker
 
     # Load configuration
-    try:
-        config = load_config(config_path)
+    if preloaded_config is not None:
+        # When config is already loaded by the caller (CLI non-reload path),
+        # env_file has already been applied during that initial load step.
+        config = preloaded_config
         _configure_logging(config.serve.debug)
-        logger.info(f"Loaded configuration from {config_path}")
-    except Exception as e:
-        logger.error(f"Failed to load configuration: {e}")
-        raise
+        logger.info("Using preloaded configuration")
+    else:
+        try:
+            config = load_config(config_path, env_file=env_file)
+            _configure_logging(config.serve.debug)
+            logger.info(f"Loaded configuration from {config_path}")
+        except Exception as e:
+            logger.exception(f"Failed to load configuration: {e}")
+            raise
 
     # Initialize router
     try:
@@ -110,10 +177,12 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
 
     @app.on_event("startup")
     async def startup():
+        """Start background health checker on app startup."""
         health_checker.start()
 
     @app.on_event("shutdown")
     async def shutdown():
+        """Stop background health checker on app shutdown."""
         health_checker.stop()
 
     @app.get("/health", response_model=HealthResponse)
@@ -146,7 +215,6 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                 results.append(result)
 
         return HealthStatusResponse(
-            enabled=config.health_check.enabled,
             interval=config.health_check.interval,
             max_latency_ms=config.health_check.max_latency_ms,
             last_check=health_checker.last_check,
@@ -196,15 +264,52 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             routing_response = None
             routing_result = None
             router_skipped_reason = None
+            routing_reasoning = None
             if request.model == "auto":
                 selected_model = None
-                if (
-                    config.health_check.enabled
-                    and len(config.llms) > 0
-                    and len(health_checker.healthy_models) == 0
-                ):
+
+                # Check for healthy models with backoff retry until next health check
+                async def wait_for_healthy_models():
+                    """Wait for healthy models with backoff until next scheduled health check"""
+                    if len(config.llms) == 0:
+                        return True
+                    if len(health_checker.healthy_models) > 0:
+                        return True
+
+                    # Retry with backoff, capped at 60s to avoid blocking requests too long
+                    max_wait = min(config.health_check.interval, 60)
+                    start_time = time.monotonic()
+                    delay = INITIAL_RETRY_DELAY
+
+                    while True:
+                        elapsed = time.monotonic() - start_time
+                        if elapsed >= max_wait:
+                            break
+                        logger.warning(
+                            "[health-check] no healthy models, waiting %.1fs (%.0f/%.0fs until next check)",
+                            delay,
+                            elapsed,
+                            max_wait,
+                        )
+                        await asyncio.sleep(delay)
+                        # Trigger a health check
+                        await health_checker.run_check()
+                        if len(health_checker.healthy_models) > 0:
+                            logger.info(
+                                "[health-check] models recovered: %s",
+                                list(health_checker.healthy_models),
+                            )
+                            return True
+                        elapsed = time.monotonic() - start_time
+                        delay = min(delay * RETRY_MULTIPLIER, max_wait - elapsed)
+                        if delay <= 0:
+                            break
+                    return False
+
+                has_healthy = await wait_for_healthy_models()
+                if not has_healthy and len(config.llms) > 0:
                     logger.warning(
-                        "[health-check] no healthy models available; rejecting auto request"
+                        "[health-check] no healthy models available after retries; rejecting auto request"
                     )
                     raise HTTPException(
                         status_code=503,
@@ -227,10 +332,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                         )
                     )
                     if pinned_model and pinned_model in config.llms:
-                        if (
-                            config.health_check.enabled
-                            and pinned_model in health_checker.unhealthy_models
-                        ):
+                        if pinned_model in health_checker.unhealthy_models:
                             logger.warning(
                                 "[router-skip] cached model unhealthy, rerouting: %s",
                                 pinned_model,
@@ -307,58 +409,6 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                 parts.append(f"why: {routing_reasoning[:80]}...")
             logger.info(f"[routing] {' | '.join(parts)}")
 
-            provider_api_style = config.get_api_style(model_config.provider).lower()
-            provider_messages = messages
-            if provider_api_style == "gemini":
-                thought_id_count = 0
-                for msg in messages:
-                    if msg.get("role") == "tool":
-                        if GEMINI_THOUGHT_ID_DELIMITER in str(
-                            msg.get("tool_call_id", "")
-                        ):
-                            thought_id_count += 1
-                    elif msg.get("role") == "assistant":
-                        for tc in msg.get("tool_calls", []) or []:
-                            if GEMINI_THOUGHT_ID_DELIMITER in str(
-                                (tc or {}).get("id", "")
-                            ):
-                                thought_id_count += 1
-                if thought_id_count:
-                    logger.debug(
-                        "[gemini-messages] stripped thought signatures from %s tool call ids",
-                        thought_id_count,
-                    )
-                provider_messages = sanitize_messages_for_gemini(messages)
-
-            # Build extra kwargs to pass through to provider
-            extra_kwargs = {}
-            if request.tools:
-                tools = request.tools
-
-                # Sanitize tools for provider-specific schemas.
-                if provider_api_style == "anthropic":
-                    extra_kwargs["tools"] = sanitize_tool_schema_for_anthropic(tools)
-                elif provider_api_style == "gemini":
-                    extra_kwargs["tools"] = sanitize_tool_schema_for_gemini(
-                        tools, output_format="openai"
-                    )
-                    first_tool = (
-                        extra_kwargs["tools"][0]
-                        if isinstance(extra_kwargs["tools"], list)
-                        and len(extra_kwargs["tools"]) > 0
-                        else None
-                    )
-                    if isinstance(first_tool, dict):
-                        logger.debug(
-                            "[gemini-tools] count=%s first_keys=%s first=%s",
-                            len(extra_kwargs["tools"]),
-                            list(first_tool.keys()),
-                            json.dumps(first_tool, ensure_ascii=False)[:280],
-                        )
-                else:
-                    extra_kwargs["tools"] = tools
-            if request.tool_choice is not None:
-                extra_kwargs["tool_choice"] = request.tool_choice
             # Resolve max_tokens: prefer explicit max_tokens, fall back to max_completion_tokens
             effective_max_tokens = request.max_tokens or request.max_completion_tokens
 
@@ -394,24 +444,228 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                 if key not in passthrough_exclude and value is not None:
                     provider_kwargs[key] = value
 
-            # Call the router (which uses LiteLLM)
-            logger.info("[model-call] selected_model=%s", selected_model)
-            response = await call_router_with_gemini_fallback(
-                router_instance=router,
-                selected_model=selected_model,
-                provider_messages=provider_messages,
-                request=request,
-                extra_kwargs=extra_kwargs,
-                provider_kwargs=provider_kwargs,
-                provider_api_style=provider_api_style,
-                is_tool_continuation_turn=is_tool_continuation_turn,
-                effective_max_tokens=effective_max_tokens,
-            )
+            # Helper to prepare provider-specific messages and kwargs for a model
+            def prepare_for_model(model_name: str):
+                """Prepare messages and kwargs for a specific model's provider"""
+                mc = config.llms.get(model_name)
+                if not mc:
+                    return None, None, None
+                api_style = config.get_api_style(mc.provider).lower()
+                prep_messages = messages
+                prep_extra = {}
+
+                if api_style == "gemini":
+                    prep_messages = sanitize_messages_for_gemini(messages)
+
+                if request.tools:
+                    tools = request.tools
+                    if api_style == "anthropic":
+                        prep_extra["tools"] = sanitize_tool_schema_for_anthropic(tools)
+                    elif api_style == "gemini":
+                        prep_extra["tools"] = sanitize_tool_schema_for_gemini(
+                            tools, output_format="openai"
+                        )
+                    else:
+                        prep_extra["tools"] = tools
+
+                if request.tool_choice is not None:
+                    prep_extra["tool_choice"] = request.tool_choice
+
+                return prep_messages, prep_extra, api_style
+
+            # Initialize provider-specific state for the selected model
+            provider_messages, extra_kwargs, provider_api_style = prepare_for_model(selected_model)
+
+            # Helper for backoff retry loop (extracted to reduce nesting)
+            async def _backoff_retry_loop(
+                original_model,
+                tried_models,
+                prepare_for_model,
+                provider_kwargs,
+                is_tool_continuation_turn,
+                effective_max_tokens,
+            ):
+                """Retry with exponential backoff until next health check interval.
+
+                Returns tuple (response, model, config, api_style, messages, extra_kwargs) on success,
+                or None if all retries exhausted.
+                """
+                max_wait = min(config.health_check.interval, 60)  # Cap at 60s
+                start_time = time.monotonic()
+                delay = INITIAL_RETRY_DELAY
+
+                while True:
+                    elapsed = time.monotonic() - start_time
+                    if elapsed >= max_wait:
+                        break
+                    logger.warning(
+                        "[backoff] all models failed, waiting %.1fs (%.0f/%.0fs)",
+                        delay,
+                        elapsed,
+                        max_wait,
+                    )
+                    await asyncio.sleep(delay)
+
+                    # Re-run health check and reset tried models
+                    await health_checker.run_check()
+                    tried_models.clear()
+
+                    # Rebuild fallback list with fresh health data
+                    healthy_set = health_checker.healthy_models
+                    retry_models = [original_model] + select_fallback_models(
+                        original_model,
+                        config.llms,
+                        healthy_models=healthy_set,
+                        already_tried=tried_models,
+                    )
+
+                    for try_model in retry_models:
+                        tried_models.add(try_model)
+                        mc = config.llms.get(try_model)
+                        if not mc:
+                            continue
+
+                        prep_messages, prep_extra, api_style = prepare_for_model(try_model)
+                        if prep_messages is None:
+                            continue
+
+                        try:
+                            logger.info("[backoff] retrying model=%s", try_model)
+                            resp = await call_router_with_gemini_fallback(
+                                router_instance=router,
+                                selected_model=try_model,
+                                provider_messages=prep_messages,
+                                request=request,
+                                extra_kwargs=prep_extra,
+                                provider_kwargs=provider_kwargs,
+                                provider_api_style=api_style,
+                                is_tool_continuation_turn=is_tool_continuation_turn,
+                                effective_max_tokens=effective_max_tokens,
+                            )
+                            logger.info("[backoff] succeeded with %s", try_model)
+                            return (resp, try_model, mc, api_style, prep_messages, prep_extra)
+
+                        except Exception as e:
+                            if not is_retryable_error(e):
+                                raise
+                            continue
+
+                    elapsed = time.monotonic() - start_time
+                    delay = min(delay * RETRY_MULTIPLIER, max_wait - elapsed)
+                    if delay <= 0:
+                        break
+
+                return None
+
+            # Call the model with fallback on retryable errors
+            async def call_model_with_fallback():
+                """Call model with fallback to similar-ELO models on retryable errors"""
+                nonlocal selected_model, model_config, provider_api_style
+                nonlocal provider_messages, extra_kwargs
+
+                tried_models = set()
+                original_model = selected_model
+                healthy_set = health_checker.healthy_models
+
+                # Build fallback list: original model + ELO-similar models
+                models_to_try = [selected_model] + select_fallback_models(
+                    selected_model,
+                    config.llms,
+                    healthy_models=healthy_set,
+                    already_tried=tried_models,
+                )
+
+                last_error = None
+                for try_model in models_to_try:
+                    tried_models.add(try_model)
+                    mc = config.llms.get(try_model)
+                    if not mc:
+                        continue
+
+                    prep_messages, prep_extra, api_style = prepare_for_model(try_model)
+                    if prep_messages is None:
+                        continue
+
+                    try:
+                        logger.info("[model-call] trying model=%s", try_model)
+                        resp = await call_router_with_gemini_fallback(
+                            router_instance=router,
+                            selected_model=try_model,
+                            provider_messages=prep_messages,
+                            request=request,
+                            extra_kwargs=prep_extra,
+                            provider_kwargs=provider_kwargs,
+                            provider_api_style=api_style,
+                            is_tool_continuation_turn=is_tool_continuation_turn,
+                            effective_max_tokens=effective_max_tokens,
+                        )
+                        # Success - update state
+                        if try_model != original_model:
+                            logger.info(
+                                "[fallback] succeeded with %s (ELO-similar) after %s failed",
+                                try_model,
+                                original_model,
+                            )
+                        selected_model = try_model
+                        model_config = mc
+                        provider_api_style = api_style
+                        provider_messages = prep_messages
+                        extra_kwargs = prep_extra
+                        return resp
+
+                    except Exception as e:
+                        last_error = e
+                        if is_retryable_error(e):
+                            logger.warning(
+                                "[fallback] model %s failed with retryable error: %s",
+                                try_model,
+                                str(e)[:200],
+                            )
+                            continue
+                        else:
+                            logger.error(
+                                "[fallback] model %s failed with non-retryable error: %s",
+                                try_model,
+                                str(e)[:200],
+                            )
+                            raise
+
+                # All models failed - backoff until next health check
+                if last_error and is_retryable_error(last_error):
+                    result = await _backoff_retry_loop(
+                        original_model=original_model,
+                        tried_models=tried_models,
+                        prepare_for_model=prepare_for_model,
+                        provider_kwargs=provider_kwargs,
+                        is_tool_continuation_turn=is_tool_continuation_turn,
+                        effective_max_tokens=effective_max_tokens,
+                    )
+                    if result is not None:
+                        resp, try_model, mc, api_style, prep_messages, prep_extra = result
+                        selected_model = try_model
+                        model_config = mc
+                        provider_api_style = api_style
+                        provider_messages = prep_messages
+                        extra_kwargs = prep_extra
+                        return resp
+
+                # Raise the last error, or a generic error if all models were skipped
+                if last_error:
+                    raise last_error
+                raise HTTPException(
+                    status_code=503,
+                    detail="All models were skipped or unavailable",
+                )
+
+            response = await call_model_with_fallback()
+            show_model_prefix = bool(getattr(config.serve, "show_model_prefix", False))
+            response_model_prefix = _model_prefix(selected_model)
 
             # Handle streaming vs non-streaming
             if request.stream:
 
                 async def logged_stream():
+                    """Wrap streaming response with logging and Gemini retry handling."""
                     request_id = "stream"
                     sent_router_meta = False
                     streamed_tool_names = set()
@@ -420,6 +674,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                     retried_gemini_tool_schema = False
                     retried_gemini_tool_schema_camel = False
                     retried_gemini_without_tools = False
+                    model_prefix_pending = show_model_prefix
                     current_response = response
 
                     def _router_meta() -> Dict[str, Any]:
@@ -478,7 +733,11 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                                             chunk_data["lazyrouter"] = _router_meta()
                                             sent_router_meta = True
                                         for choice in chunk_data.get("choices", []):
+                                            if not isinstance(choice, dict):
+                                                continue
                                             delta = choice.get("delta", {})
+                                            if not isinstance(delta, dict):
+                                                continue
                                             for tool_call in (
                                                 delta.get("tool_calls", []) or []
                                             ):
@@ -504,6 +763,18 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                                                             else "",
                                                         }
                                                     )
+                                            choice_index = choice.get("index", 0)
+                                            if choice_index == 0:
+                                                (
+                                                    delta_content,
+                                                    model_prefix_pending,
+                                                ) = _prefix_stream_delta_content_if_needed(
+                                                    delta,
+                                                    response_model_prefix,
+                                                    model_prefix_pending,
+                                                )
+                                            else:
+                                                delta_content = delta.get("content", "")
                                         emitted_chunks += 1
                                         yield f"data: {json.dumps(chunk_data)}\n\n"
                                     except json.JSONDecodeError:
@@ -662,12 +933,10 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                     logged_stream(), media_type="text/event-stream"
                 )
             else:
-                tool_calls = (
-                    response.get("choices", [{}])[0]
-                    .get("message", {})
-                    .get("tool_calls")
-                    or []
-                )
+                response_message = _get_first_response_message(response)
+                tool_calls = response_message.get("tool_calls") if response_message else []
+                if not isinstance(tool_calls, list):
+                    tool_calls = []
                 used_tool_names = []
                 for tool_call in tool_calls:
                     if not isinstance(tool_call, dict):
@@ -685,6 +954,13 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                         )
                 if used_tool_names:
                     logger.info(f"[tool-calls] {used_tool_names}")
+
+                if show_model_prefix and response_message:
+                    response_message["content"] = _with_model_prefix_if_enabled(
+                        response_message.get("content"),
+                        selected_model,
+                        show_model_prefix,
+                    )
 
                 # Set model field to show which model was selected
                 response["model"] = selected_model
@@ -706,9 +982,9 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             logger.error(f"Error processing request: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
 
-    @app.get("/v1/benchmark", response_model=BenchmarkResponse)
-    async def benchmark(timeout: int = 30):
-        """Benchmark latency of all configured models and the router model."""
+    @app.get("/v1/health-check", response_model=HealthCheckResponse)
+    async def health_check_now(timeout: int = 30):
+        """Run health check on all models now and return results."""
         from .health_checker import LiteLLMWrapper
 
         # Build tasks for all configured models
@@ -723,14 +999,14 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
             model_names.append(model_name)
             tasks.append(
                 asyncio.wait_for(
-                    bench_one(
+                    check_model_health(
                         model_name, provider, model_config.model, model_config.provider
                     ),
                     timeout=timeout,
                 )
             )
 
-        # Also benchmark the router model
+        # Also check the router model
         api_key = config.get_api_key(config.router.provider)
         base_url = config.get_base_url(config.router.provider)
         api_style = config.get_api_style(config.router.provider)
@@ -747,7 +1023,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
         model_names.append("router")
         tasks.append(
             asyncio.wait_for(
-                bench_one(
+                check_model_health(
                     "router",
                     router_provider,
                     router_actual_model,
@@ -763,7 +1039,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
 
         results = []
         for i, r in enumerate(raw_results):
-            if isinstance(r, BenchmarkResult):
+            if isinstance(r, HealthCheckResult):
                 results.append(r)
             else:
                 # Timeout or unexpected exception
@@ -775,7 +1051,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                     else str(r)
                 )
                 results.append(
-                    BenchmarkResult(
+                    HealthCheckResult(
                         model=name,
                         provider=mc.provider if mc else config.router.provider,
                         actual_model=mc.model if mc else config.router.model,
@@ -785,7 +1061,7 @@ def create_app(config_path: str = "config.yaml") -> FastAPI:
                     )
                 )
 
-        return BenchmarkResponse(
+        return HealthCheckResponse(
             timestamp=datetime.now(timezone.utc).isoformat(),
             results=results,
         )
