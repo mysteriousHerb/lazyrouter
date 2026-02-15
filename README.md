@@ -130,7 +130,7 @@ curl -X POST http://localhost:1234/v1/chat/completions \
 
 LazyRouter uses a lightweight LLM-based routing architecture:
 
-```
+```text
 ┌─────────────────┐     ┌──────────────────┐     ┌──────────────────┐     ┌─────────────────┐
 │  Client Request │────▶│  Router Model    │────▶│ Context Trimming │────▶│  LLM Provider   │
 │  (model: auto)  │     │  (cheap & fast)  │     │  (token control) │     │  (via LiteLLM)  │
