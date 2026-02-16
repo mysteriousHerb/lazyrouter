@@ -162,7 +162,7 @@ Current fixtures cover:
 
 - ✅ Anthropic tool-calling (2-step flow with tool_use/tool_result)
 - ✅ OpenAI tool-calling request
-- ⏳ Gemini tool-calling (captured but not yet extracted)
+- ✅ Gemini tool-calling (2-step flow with functionCall/functionResponse)
 - ⏳ Error cases (rate limits, timeouts, invalid tool calls)
 - ⏳ Multi-tool scenarios (parallel tool calls)
 - ⏳ Long conversations (context compression)

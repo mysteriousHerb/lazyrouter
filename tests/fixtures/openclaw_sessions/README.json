@@ -20,6 +20,12 @@
       "description": "Single-step tool call request",
       "user_request": "do a tool call to find system time",
       "steps": 1
+    },
+    {
+      "fixture": "gemini_tool_call_system_time.json",
+      "description": "Complete 2-step flow: function call request + function result continuation",
+      "user_request": "hi can you do a tool call, like find system time and memory usage",
+      "steps": 2
     }
   ]
 }

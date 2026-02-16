@@ -83,6 +83,42 @@ def send_anthropic_request(client: httpx.Client, base_url: str, payload: dict, s
     return chunks
 
 
+def send_gemini_request(client: httpx.Client, base_url: str, request_data: dict, stream: bool = True):
+    """Send Gemini-format request and return response or chunks."""
+    # Extract path and body from captured request
+    path = request_data.get("path", "models/auto:streamGenerateContent")
+    body = request_data.get("body", {})
+
+    # Use the resolved path if available
+    resolved_path = request_data.get("resolved_path", path)
+
+    url = f"{base_url}/v1/gemini/{resolved_path}"
+
+    headers = {
+        "Content-Type": "application/json",
+    }
+
+    if not stream:
+        resp = client.post(url, json=body, headers=headers, timeout=120)
+        return resp.json() if resp.status_code == 200 else None
+
+    # Streaming
+    chunks = []
+    with client.stream("POST", url, json=body, headers=headers, timeout=120) as resp:
+        if resp.status_code != 200:
+            return None
+        for line in resp.iter_lines():
+            if not line or not line.startswith("data: "):
+                continue
+            data_str = line[6:]
+            try:
+                chunk = json.loads(data_str)
+                chunks.append(chunk)
+            except json.JSONDecodeError:
+                continue
+    return chunks
+
+
 # ============================================================================
 # Anthropic Tool-Calling Tests
 # ============================================================================
@@ -178,6 +214,56 @@ def test_openai_tool_call_system_time():
 
 
 # ============================================================================
+# Gemini Tool-Calling Tests
+# ============================================================================
+
+@pytest.mark.skipif(
+    os.getenv("LAZYROUTER_E2E_TEST") != "1",
+    reason="E2E test requires running server (set LAZYROUTER_E2E_TEST=1 to enable)"
+)
+def test_gemini_tool_call_system_time_step1():
+    """Test step 1: Initial tool call request (Gemini format)."""
+    base_url = os.getenv("LAZYROUTER_TEST_URL", DEFAULT_BASE_URL)
+    fixture = load_fixture("gemini_tool_call_system_time.json")
+
+    client = httpx.Client()
+    chunks = send_gemini_request(client, base_url, fixture["step1_request"], stream=True)
+
+    assert chunks is not None, "Should receive streaming response"
+    assert len(chunks) > 0, "Should have at least one chunk"
+
+    # Check for functionCall in response
+    has_function_call = any(
+        "functionCall" in str(chunk) or "function_call" in str(chunk)
+        for chunk in chunks
+    )
+    assert has_function_call, "Response should contain functionCall"
+
+
+@pytest.mark.skipif(
+    os.getenv("LAZYROUTER_E2E_TEST") != "1",
+    reason="E2E test requires running server (set LAZYROUTER_E2E_TEST=1 to enable)"
+)
+def test_gemini_tool_call_system_time_step2():
+    """Test step 2: Tool result continuation (Gemini format)."""
+    base_url = os.getenv("LAZYROUTER_TEST_URL", DEFAULT_BASE_URL)
+    fixture = load_fixture("gemini_tool_call_system_time.json")
+
+    client = httpx.Client()
+    chunks = send_gemini_request(client, base_url, fixture["step2_request"], stream=True)
+
+    assert chunks is not None, "Should receive streaming response"
+    assert len(chunks) > 0, "Should have at least one chunk"
+
+    # Check for text content in response (final answer after tool execution)
+    has_text = any(
+        "text" in str(chunk)
+        for chunk in chunks
+    )
+    assert has_text, "Response should contain text content after processing tool results"
+
+
+# ============================================================================
 # Fixture Validation Tests
 # ============================================================================
 
@@ -187,6 +273,7 @@ def test_fixtures_exist():
 
     expected_files = [
         "anthropic_tool_call_system_time.json",
+        "gemini_tool_call_system_time.json",
         "openai_tool_call_system_time.json",
         "README.json",
     ]
