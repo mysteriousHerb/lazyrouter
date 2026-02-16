@@ -61,6 +61,7 @@ def main():
     # Determine host and port
     host = args.host or config.serve.host
     port = args.port or config.serve.port
+    log_level = "debug" if config.serve.debug else "info"
 
     print(f"Starting LazyRouter server on {host}:{port}")
     print(f"Router model: {config.router.model}")
@@ -89,6 +90,7 @@ def main():
             port=port,
             reload=True,
             factory=True,
+            log_level=log_level,
         )
     else:
         # Reuse the already-loaded config to avoid parsing YAML/dotenv twice.
@@ -96,4 +98,4 @@ def main():
         app = create_app(
             args.config, env_file=args.env_file, preloaded_config=config
         )
-        uvicorn.run(app, host=host, port=port)
+        uvicorn.run(app, host=host, port=port, log_level=log_level)
