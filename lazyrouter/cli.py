@@ -72,8 +72,8 @@ def main():
     print(f"  - Health: http://{host}:{port}/health")
     print(f"  - Models: http://{host}:{port}/v1/models")
     print(f"  - Health Status: http://{host}:{port}/v1/health-status")
+    print(f"  - Health Check: http://{host}:{port}/v1/health-check")
     print(f"  - Chat: http://{host}:{port}/v1/chat/completions")
-    print(f"  - Benchmark: http://{host}:{port}/v1/benchmark")
     print(f"\nDocs: http://{host}:{port}/docs")
 
     # Run server

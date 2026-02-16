@@ -20,6 +20,55 @@ BENCH_MAX_TOKENS = 16
 BENCH_TEMPERATURE = 0.0
 
 
+def _compact_error(error: Exception, limit: int = 240) -> str:
+    """Return a one-line, bounded error summary for logs."""
+    error_str = str(error).strip()
+    text = error_str.splitlines()[0] if error_str else repr(error)
+    return text if len(text) <= limit else f"{text[:limit]}..."
+
+
+def _parse_stream_chunk_payload(chunk: Any) -> Optional[Dict[str, Any]]:
+    """Extract JSON payload from an SSE chunk."""
+    if isinstance(chunk, dict):
+        return chunk
+
+    if not isinstance(chunk, str):
+        return None
+
+    text = chunk.strip()
+    if not text.startswith("data:"):
+        return None
+
+    payload_text = text[len("data:") :].strip()
+    if not payload_text or payload_text == "[DONE]":
+        return None
+
+    try:
+        parsed = json.loads(payload_text)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _chunk_has_text_delta(payload: Dict[str, Any]) -> bool:
+    """Return True when a stream chunk carries textual assistant delta."""
+    choices = payload.get("choices")
+    if not isinstance(choices, list):
+        return False
+
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+        delta = choice.get("delta")
+        if not isinstance(delta, dict):
+            continue
+        content = delta.get("content")
+        if isinstance(content, str) and content.strip():
+            return True
+
+    return False
+
+
 class LiteLLMWrapper:
     """Wrapper to provide provider-like interface for LiteLLM"""
 
@@ -83,18 +132,39 @@ class LiteLLMWrapper:
 async def check_model_health(
     name: str, provider, actual_model: str, provider_name: str, is_router: bool = False
 ) -> HealthCheckResult:
-    """Check health of a single model with one non-streaming request."""
+    """Check health using a streaming probe, with non-stream fallback."""
     ttft_ms = None
+    ttft_source = None
+    ttft_unavailable_reason = None
     total_ms = None
+    first_event_ms = None
     try:
         t0 = time.monotonic()
-        await provider.chat_completion(
+        stream = await provider.chat_completion(
             model=actual_model,
             messages=BENCH_PROMPT,
-            stream=False,
+            stream=True,
             temperature=BENCH_TEMPERATURE,
             max_tokens=BENCH_MAX_TOKENS,
         )
+
+        async for chunk in stream:
+            chunk_ms = round((time.monotonic() - t0) * 1000, 1)
+            payload = _parse_stream_chunk_payload(chunk)
+            if payload is None:
+                continue
+            if first_event_ms is None:
+                first_event_ms = chunk_ms
+            if ttft_ms is None and _chunk_has_text_delta(payload):
+                ttft_ms = chunk_ms
+                ttft_source = "stream_text"
+
+        # Fallback when provider streams events without textual delta content.
+        if ttft_ms is None:
+            ttft_ms = first_event_ms
+            if ttft_ms is not None:
+                ttft_source = "stream_event"
+
         total_ms = round((time.monotonic() - t0) * 1000, 1)
 
         return HealthCheckResult(
@@ -104,19 +174,61 @@ async def check_model_health(
             is_router=is_router,
             status="ok",
             ttft_ms=ttft_ms,
+            ttft_source=ttft_source,
+            ttft_unavailable_reason=ttft_unavailable_reason,
             total_ms=total_ms,
         )
-    except Exception as e:
-        return HealthCheckResult(
-            model=name,
-            provider=provider_name,
-            actual_model=actual_model,
-            is_router=is_router,
-            status="error",
-            ttft_ms=ttft_ms,
-            total_ms=total_ms,
-            error=str(e),
+    except Exception as stream_error:
+        # Some providers/parsers can fail in stream mode even when non-streaming
+        # completions are healthy. Fall back to non-stream probe to avoid false
+        # unhealthy status caused only by TTFT measurement path.
+        logger.debug(
+            "Health-check stream probe failed for model=%s (%s); retrying non-stream: %s",
+            name,
+            actual_model,
+            _compact_error(stream_error),
         )
+        # Force TTFT fields to match the non-stream fallback source.
+        ttft_ms = None
+        ttft_source = "unavailable_non_stream"
+        ttft_unavailable_reason = _compact_error(stream_error)
+        try:
+            t0 = time.monotonic()
+            await provider.chat_completion(
+                model=actual_model,
+                messages=BENCH_PROMPT,
+                stream=False,
+                temperature=BENCH_TEMPERATURE,
+                max_tokens=BENCH_MAX_TOKENS,
+            )
+            total_ms = round((time.monotonic() - t0) * 1000, 1)
+            return HealthCheckResult(
+                model=name,
+                provider=provider_name,
+                actual_model=actual_model,
+                is_router=is_router,
+                status="ok",
+                ttft_ms=None,
+                ttft_source=ttft_source,
+                ttft_unavailable_reason=ttft_unavailable_reason,
+                total_ms=total_ms,
+            )
+        except Exception as fallback_error:
+            return HealthCheckResult(
+                model=name,
+                provider=provider_name,
+                actual_model=actual_model,
+                is_router=is_router,
+                status="error",
+                ttft_ms=ttft_ms,
+                ttft_source=ttft_source,
+                ttft_unavailable_reason=ttft_unavailable_reason,
+                total_ms=total_ms,
+                error=(
+                    f"stream probe failed: {_compact_error(stream_error)}; "
+                    f"non-stream probe failed: {_compact_error(fallback_error)}"
+                ),
+            )
 
 
 class HealthChecker:
