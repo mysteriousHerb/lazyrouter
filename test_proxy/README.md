@@ -13,7 +13,7 @@ Lightweight FastAPI proxy for capturing incoming/outgoing payloads across provid
 
 ## Prerequisites
 
-- From repository root: `c:\Users\herbz\Documents\Github\lazyrouter_dev2`
+- Run commands from the repository root.
 - Config file present (default: `config.yaml`)
 - API keys loaded (usually via `.env` values referenced by `config.yaml`)
 

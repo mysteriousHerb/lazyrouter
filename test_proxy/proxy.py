@@ -720,7 +720,14 @@ async def gemini_proxy(request: Request, path: str):
 @app.get("/test/openai")
 async def test_openai():
     """Test OpenAI provider with a simple request."""
-    api_key, base_url, _ = get_provider_config("openai")
+    try:
+        api_key, base_url, _, actual_model = get_provider_for_model(
+            "auto",
+            preferred_api_style="openai",
+            require_preferred_style=True,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     base_url = base_url or "https://api.openai.com"
 
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -731,7 +738,7 @@ async def test_openai():
                 "Authorization": f"Bearer {api_key}",
             },
             json={
-                "model": "gpt-4o-mini",
+                "model": actual_model,
                 "messages": [{"role": "user", "content": "Say 'test ok'"}],
                 "max_tokens": 10,
             },
@@ -746,7 +753,14 @@ async def test_openai():
 @app.get("/test/anthropic")
 async def test_anthropic():
     """Test Anthropic provider with a simple request."""
-    api_key, base_url, _ = get_provider_config("anthropic")
+    try:
+        api_key, base_url, _, actual_model = get_provider_for_model(
+            "auto",
+            preferred_api_style="anthropic",
+            require_preferred_style=True,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     base_url = base_url or "https://api.anthropic.com"
 
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -758,7 +772,7 @@ async def test_anthropic():
                 "anthropic-version": "2023-06-01",
             },
             json={
-                "model": "claude-3-haiku-20240307",
+                "model": actual_model,
                 "messages": [{"role": "user", "content": "Say 'test ok'"}],
                 "max_tokens": 10,
             },
@@ -773,10 +787,20 @@ async def test_anthropic():
 @app.get("/test/gemini")
 async def test_gemini():
     """Test Gemini provider with a simple request."""
-    api_key, base_url, _ = get_provider_config("gemini")
+    try:
+        api_key, base_url, _, actual_model = get_provider_for_model(
+            "auto",
+            preferred_api_style="gemini",
+            require_preferred_style=True,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     base_url = base_url or GEMINI_DEFAULT_BASE
 
-    url = f"{base_url.rstrip('/')}/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+    url = (
+        f"{base_url.rstrip('/')}/v1beta/models/"
+        f"{actual_model}:generateContent?key={api_key}"
+    )
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(
