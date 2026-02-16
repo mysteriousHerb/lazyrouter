@@ -48,7 +48,6 @@ from .tool_cache import (
     tool_cache_clear_session,
     tool_cache_set,
 )
-from .usage_logger import UsageLogger, estimate_tokens
 from .retry_handler import (
     is_retryable_error,
     select_fallback_models,
@@ -69,8 +68,13 @@ logger = logging.getLogger(__name__)
 # Global config and router (initialized in create_app)
 config: Config = None
 router: LLMRouter = None
-usage_logger: UsageLogger = None
 health_checker: HealthChecker = None
+
+
+def _configure_logging(debug: bool) -> None:
+    """Apply runtime log level from config."""
+    level = logging.DEBUG if debug else logging.INFO
+    logging.getLogger("lazyrouter").setLevel(level)
 
 
 def _model_prefix(selected_model: str) -> str:
@@ -135,17 +139,19 @@ def create_app(
     Returns:
         Configured FastAPI app
     """
-    global config, router, usage_logger, health_checker
+    global config, router, health_checker
 
     # Load configuration
     if preloaded_config is not None:
         # When config is already loaded by the caller (CLI non-reload path),
         # env_file has already been applied during that initial load step.
         config = preloaded_config
+        _configure_logging(config.serve.debug)
         logger.info("Using preloaded configuration")
     else:
         try:
             config = load_config(config_path, env_file=env_file)
+            _configure_logging(config.serve.debug)
             logger.info(f"Loaded configuration from {config_path}")
         except Exception as e:
             logger.exception(f"Failed to load configuration: {e}")
@@ -158,10 +164,6 @@ def create_app(
     except Exception as e:
         logger.error(f"Failed to initialize router: {e}")
         raise
-
-    # Initialize usage logger
-    usage_logger = UsageLogger()
-    logger.info(f"Usage logging to {usage_logger.log_path}")
 
     # Initialize health checker
     health_checker = HealthChecker(config)
@@ -227,7 +229,6 @@ def create_app(
 
         Supports both automatic routing (model="auto") and manual model selection
         """
-        start_time = time.monotonic()
         try:
             routing_reasoning = None
 
@@ -240,7 +241,7 @@ def create_app(
                 msg_dict.update(extras)
                 messages.append(msg_dict)
 
-            # Log request context (last user message + whether tool results are included)
+            # Build minimal request context needed for cache/session behavior.
             last_user_text_raw = ""
             for msg in reversed(messages):
                 if msg.get("role") == "user":
@@ -255,71 +256,9 @@ def create_app(
                         cleared_tool,
                         session_key,
                     )
-            last_user_text = last_user_text_raw
-            last_user_text = " ".join(last_user_text.split())
-            if len(last_user_text) > 420:
-                last_user_text = last_user_text[:420] + "..."
             tool_name_by_id = tool_call_name_by_id(messages)
-            all_tool_results = [
-                m for m in messages if m.get("role") == "tool" and m.get("tool_call_id")
-            ]
             incoming_tool_results = collect_trailing_tool_results(messages)
             is_tool_continuation_turn = bool(incoming_tool_results)
-
-            # One-line request log with user query for easier debugging/copying.
-            tool_suffix = (
-                f" (tool continuation: {len(incoming_tool_results)} results)"
-                if is_tool_continuation_turn
-                else ""
-            )
-            logger.debug(
-                "[request] model=%s session=%s user=%s%s",
-                request.model,
-                session_key or "no-session",
-                last_user_text,
-                tool_suffix,
-            )
-
-            if all_tool_results:
-                in_names = sorted(
-                    {
-                        (
-                            m.get("name")
-                            if isinstance(m.get("name"), str) and m.get("name")
-                            else tool_name_by_id.get(
-                                str(m.get("tool_call_id", "")).strip()
-                            )
-                        )
-                        for m in all_tool_results
-                        if (isinstance(m.get("name"), str) and m.get("name"))
-                        or tool_name_by_id.get(str(m.get("tool_call_id", "")).strip())
-                    }
-                )
-                empty_results = sum(
-                    1
-                    for m in all_tool_results
-                    if not content_to_text(m.get("content")).strip()
-                )
-                logger.debug(
-                    "[tool-results-in] continuation=%s trailing=%s total=%s names=%s empty=%s",
-                    is_tool_continuation_turn,
-                    len(incoming_tool_results),
-                    len(all_tool_results),
-                    in_names,
-                    empty_results,
-                )
-                if incoming_tool_results:
-                    incoming_tool_text = "\n".join(
-                        content_to_text(m.get("content")) for m in incoming_tool_results
-                    )
-                    logger.info(
-                        "[tool-results-size] trailing=%s chars=%s tokens~%s",
-                        len(incoming_tool_results),
-                        len(incoming_tool_text),
-                        estimate_tokens(incoming_tool_text),
-                    )
-            else:
-                in_names = []
 
             # Determine which model to use
             routing_response = None
@@ -727,8 +666,6 @@ def create_app(
 
                 async def logged_stream():
                     """Wrap streaming response with logging and Gemini retry handling."""
-                    collected_content = []
-                    stream_usage = None
                     request_id = "stream"
                     sent_router_meta = False
                     streamed_tool_names = set()
@@ -795,8 +732,6 @@ def create_app(
                                         if not sent_router_meta:
                                             chunk_data["lazyrouter"] = _router_meta()
                                             sent_router_meta = True
-                                        if chunk_data.get("usage"):
-                                            stream_usage = chunk_data["usage"]
                                         for choice in chunk_data.get("choices", []):
                                             if not isinstance(choice, dict):
                                                 continue
@@ -840,8 +775,6 @@ def create_app(
                                                 )
                                             else:
                                                 delta_content = delta.get("content", "")
-                                            if delta_content:
-                                                collected_content.append(delta_content)
                                         emitted_chunks += 1
                                         yield f"data: {json.dumps(chunk_data)}\n\n"
                                     except json.JSONDecodeError:
@@ -985,38 +918,14 @@ def create_app(
                             yield "data: [DONE]\n\n"
                             break
 
-                    # Log after stream completes
+                    # Close upstream stream after completion or retry exit.
                     await _close_stream_if_possible(current_response)
-                    latency_ms = (time.monotonic() - start_time) * 1000
-                    stream_response_content = "".join(collected_content)
-                    if show_model_prefix:
-                        stream_response_content = stream_response_content.removeprefix(
-                            response_model_prefix
-                        )
-                    entry = usage_logger.build_entry(
-                        request_id=request_id,
-                        model_requested=request.model,
-                        model_selected=selected_model,
-                        messages=messages,
-                        response_content=stream_response_content,
-                        usage=stream_usage,
-                        model_input_price=model_config.input_price,
-                        model_output_price=model_config.output_price,
-                        stream=True,
-                        temperature=request.temperature,
-                        latency_ms=latency_ms,
-                        routing_response=routing_response,
-                        compression_stats=compression_stats,
-                    )
-                    usage_logger.log(entry)
-                    cached_count = 0
                     for tc in streamed_tool_calls:
                         tcid = str(tc.get("id", "")).strip()
                         tname = str(tc.get("name", "")).strip()
                         if not tcid:
                             continue
                         tool_cache_set(session_key, tcid, selected_model, tname)
-                        cached_count += 1
                     if streamed_tool_names:
                         logger.info(f"[tool-calls] {sorted(streamed_tool_names)}")
 
@@ -1025,30 +934,6 @@ def create_app(
                 )
             else:
                 response_message = _get_first_response_message(response)
-                response_content = (
-                    content_to_text(response_message.get("content"))
-                    if response_message
-                    else ""
-                )
-
-                # Log non-streaming response
-                latency_ms = (time.monotonic() - start_time) * 1000
-                entry = usage_logger.build_entry(
-                    request_id=response.get("id", "unknown"),
-                    model_requested=request.model,
-                    model_selected=selected_model,
-                    messages=messages,
-                    response_content=response_content,
-                    usage=response.get("usage"),
-                    model_input_price=model_config.input_price,
-                    model_output_price=model_config.output_price,
-                    stream=False,
-                    temperature=request.temperature,
-                    latency_ms=latency_ms,
-                    routing_response=routing_response,
-                    compression_stats=compression_stats,
-                )
-                usage_logger.log(entry)
                 tool_calls = response_message.get("tool_calls") if response_message else []
                 if not isinstance(tool_calls, list):
                     tool_calls = []
