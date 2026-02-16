@@ -13,20 +13,22 @@ Loads provider config from config.yaml (same as LazyRouter).
 import argparse
 import json
 import logging
+import re
 import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Optional
 from urllib.parse import unquote
 
 import httpx
-from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
 from lazyrouter.config import Config, load_config
 from lazyrouter.error_logger import sanitize_for_log
+from lazyrouter.model_normalization import normalize_requested_model as normalize_model_id
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -52,24 +54,13 @@ configure_log_dir(str(LOG_DIR))
 
 def load_proxy_config(config_path: str, env_file: str) -> Config:
     """Load env file first, then load LazyRouter config."""
-    load_dotenv(env_file, override=True)
-    return load_config(config_path)
+    return load_config(config_path, env_file=env_file)
 
 
 def normalize_requested_model(model_name: str) -> str:
     """Normalize provider-prefixed model ids (e.g. lazyrouter/auto)."""
-    normalized = (model_name or "").strip()
-    if not normalized:
-        return normalized
-    if normalized.lower() == "auto":
-        return "auto"
-    if "/" in normalized:
-        suffix = normalized.rsplit("/", 1)[-1].strip()
-        if suffix.lower() == "auto":
-            return "auto"
-        if config is not None and suffix in config.llms and normalized not in config.llms:
-            return suffix
-    return normalized
+    available_models = config.llms if config is not None else {}
+    return normalize_model_id(model_name, available_models)
 
 
 def get_provider_config(api_style: str) -> tuple[str, Optional[str], str]:
@@ -77,7 +68,7 @@ def get_provider_config(api_style: str) -> tuple[str, Optional[str], str]:
     if config is None:
         raise RuntimeError("Config not loaded")
 
-    for name, prov in config.providers.items():
+    for _name, prov in config.providers.items():
         if prov.api_style.lower() == api_style.lower():
             return prov.api_key, prov.base_url, prov.api_style
         # Also match "openai-completions" style
@@ -130,7 +121,7 @@ def get_provider_for_model(
     # Handle "auto" - prefer model with matching style for the incoming endpoint.
     if model_name.lower() == "auto" and config.llms:
         if preferred_api_style:
-            for llm_key, llm_config in config.llms.items():
+            for _llm_key, llm_config in config.llms.items():
                 provider_name = llm_config.provider
                 if provider_name not in config.providers:
                     continue
@@ -232,8 +223,56 @@ def resolve_gemini_model_path(path: str) -> tuple[str, Optional[str]]:
 
 def get_log_path(api_style: str) -> Path:
     """Get log file path for a given API style."""
-    date_str = datetime.now().strftime("%Y-%m-%d")
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     return LOG_DIR / f"{api_style}_{date_str}.jsonl"
+
+
+_REDACTABLE_QUERY_PARAM_PATTERN = re.compile(
+    r"([?&](?:key|api_key|x-api-key)=)([^&\s]+)",
+    flags=re.IGNORECASE,
+)
+_UNSAFE_RESPONSE_HEADERS = {
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailers",
+    "transfer-encoding",
+    "upgrade",
+    "content-encoding",
+    "content-length",
+}
+
+
+def _sanitize_error_message(
+    error: BaseException | str, sensitive_values: Optional[list[str]] = None
+) -> str:
+    """Redact API key material from error strings before logging."""
+    message = str(error)
+    message = _REDACTABLE_QUERY_PARAM_PATTERN.sub(r"\1[REDACTED]", message)
+    for value in sensitive_values or []:
+        if value:
+            message = message.replace(value, "[REDACTED]")
+    return message
+
+
+def _safe_response_headers(headers: httpx.Headers) -> Dict[str, str]:
+    """Filter unsafe hop-by-hop and encoding-specific upstream headers."""
+    return {
+        key: value
+        for key, value in headers.items()
+        if key.lower() not in _UNSAFE_RESPONSE_HEADERS
+    }
+
+
+def _pop_header(headers: Dict[str, str], header_name: str) -> Optional[str]:
+    """Pop a header using case-insensitive lookup."""
+    needle = header_name.lower()
+    for key in list(headers.keys()):
+        if key.lower() == needle:
+            return headers.pop(key)
+    return None
 
 
 def log_exchange(
@@ -290,20 +329,22 @@ def log_exchange(
     )
 
 
+@asynccontextmanager
+async def app_lifespan(_app: FastAPI):
+    global config
+    if config is None:
+        config = load_proxy_config(APP_CONFIG_PATH, APP_ENV_FILE)
+        logger.info("Loaded config from %s", APP_CONFIG_PATH)
+    logger.info("Available providers: %s", list(config.providers.keys()))
+    yield
+
+
 app = FastAPI(
     title="Test Proxy",
     description="Multi-format LLM API proxy with request/response logging",
     version="0.1.0",
+    lifespan=app_lifespan,
 )
-
-
-@app.on_event("startup")
-async def startup():
-    global config
-    if config is None:
-        config = load_proxy_config(APP_CONFIG_PATH, APP_ENV_FILE)
-    logger.info(f"Loaded config from {APP_CONFIG_PATH}")
-    logger.info(f"Available providers: {list(config.providers.keys())}")
 
 
 @app.get("/health")
@@ -372,6 +413,7 @@ async def openai_chat_completions(request: Request):
             request_id=request_id,
             start_time=start_time,
             incoming_headers=incoming_headers,
+            sensitive_values=[api_key],
         )
 
     async with httpx.AsyncClient(timeout=120.0) as client:
@@ -394,7 +436,7 @@ async def openai_chat_completions(request: Request):
             return Response(
                 content=resp.content,
                 status_code=resp.status_code,
-                headers=dict(resp.headers),
+                headers=_safe_response_headers(resp.headers),
             )
         except Exception as e:
             latency_ms = (time.monotonic() - start_time) * 1000
@@ -405,7 +447,7 @@ async def openai_chat_completions(request: Request):
                 None,
                 latency_ms,
                 is_stream,
-                error=str(e),
+                error=_sanitize_error_message(e, [api_key]),
                 request_headers=incoming_headers,
             )
             raise
@@ -473,6 +515,7 @@ async def openai_responses(request: Request):
             request_id=request_id,
             start_time=start_time,
             incoming_headers=incoming_headers,
+            sensitive_values=[api_key],
         )
 
     async with httpx.AsyncClient(timeout=120.0) as client:
@@ -495,7 +538,7 @@ async def openai_responses(request: Request):
             return Response(
                 content=resp.content,
                 status_code=resp.status_code,
-                headers=dict(resp.headers),
+                headers=_safe_response_headers(resp.headers),
             )
         except Exception as e:
             latency_ms = (time.monotonic() - start_time) * 1000
@@ -506,7 +549,7 @@ async def openai_responses(request: Request):
                 None,
                 latency_ms,
                 is_stream,
-                error=str(e),
+                error=_sanitize_error_message(e, [api_key]),
                 request_headers=incoming_headers,
             )
             raise
@@ -574,6 +617,7 @@ async def anthropic_messages(request: Request):
             request_id=request_id,
             start_time=start_time,
             incoming_headers=incoming_headers,
+            sensitive_values=[api_key],
         )
 
     async with httpx.AsyncClient(timeout=120.0) as client:
@@ -596,7 +640,7 @@ async def anthropic_messages(request: Request):
             return Response(
                 content=resp.content,
                 status_code=resp.status_code,
-                headers=dict(resp.headers),
+                headers=_safe_response_headers(resp.headers),
             )
         except Exception as e:
             latency_ms = (time.monotonic() - start_time) * 1000
@@ -607,7 +651,7 @@ async def anthropic_messages(request: Request):
                 None,
                 latency_ms,
                 is_stream,
-                error=str(e),
+                error=_sanitize_error_message(e, [api_key]),
                 request_headers=incoming_headers,
             )
             raise
@@ -696,6 +740,7 @@ async def gemini_proxy(request: Request, path: str):
             start_time=start_time,
             incoming_headers=incoming_headers,
             stream_format="sse" if wants_sse else "gemini",
+            sensitive_values=[api_key],
         )
 
     async with httpx.AsyncClient(timeout=120.0) as client:
@@ -729,7 +774,7 @@ async def gemini_proxy(request: Request, path: str):
             return Response(
                 content=resp.content,
                 status_code=resp.status_code,
-                headers=dict(resp.headers),
+                headers=_safe_response_headers(resp.headers),
             )
         except Exception as e:
             latency_ms = (time.monotonic() - start_time) * 1000
@@ -746,7 +791,7 @@ async def gemini_proxy(request: Request, path: str):
                 None,
                 latency_ms,
                 is_stream,
-                error=str(e),
+                error=_sanitize_error_message(e, [api_key]),
                 request_headers=incoming_headers,
             )
             raise
@@ -783,10 +828,14 @@ async def test_openai():
                 "max_tokens": 10,
             },
         )
+        try:
+            response_data = resp.json()
+        except (ValueError, json.JSONDecodeError):
+            response_data = resp.text
         return {
             "status": "ok" if resp.status_code == 200 else "error",
             "status_code": resp.status_code,
-            "response": resp.json(),
+            "response": response_data,
         }
 
 
@@ -817,10 +866,14 @@ async def test_anthropic():
                 "max_tokens": 10,
             },
         )
+        try:
+            response_data = resp.json()
+        except (ValueError, json.JSONDecodeError):
+            response_data = resp.text
         return {
             "status": "ok" if resp.status_code == 200 else "error",
             "status_code": resp.status_code,
-            "response": resp.json(),
+            "response": response_data,
         }
 
 
@@ -848,10 +901,14 @@ async def test_gemini():
             headers={"Content-Type": "application/json"},
             json={"contents": [{"parts": [{"text": "Say 'test ok'"}]}]},
         )
+        try:
+            response_data = resp.json()
+        except (ValueError, json.JSONDecodeError):
+            response_data = resp.text
         return {
             "status": "ok" if resp.status_code == 200 else "error",
             "status_code": resp.status_code,
-            "response": resp.json(),
+            "response": response_data,
         }
 
 
@@ -870,6 +927,7 @@ async def _proxy_stream(
     incoming_headers: Dict[str, str],
     stream_format: str = "sse",
     request_data: Optional[Dict[str, Any]] = None,
+    sensitive_values: Optional[list[str]] = None,
 ) -> StreamingResponse:
     """Proxy a streaming request and log all chunks."""
     collected_chunks = []
@@ -881,6 +939,7 @@ async def _proxy_stream(
     except Exception as e:
         await client.aclose()
         latency_ms = (time.monotonic() - start_time) * 1000
+        error_text = _sanitize_error_message(e, sensitive_values)
         log_exchange(
             api_style,
             request_id,
@@ -888,69 +947,44 @@ async def _proxy_stream(
             None,
             latency_ms,
             True,
-            error=str(e),
+            error=error_text,
             request_headers=incoming_headers,
         )
         raise
 
     async def stream_generator() -> AsyncGenerator[bytes, None]:
         nonlocal collected_chunks
+        stream_error: Optional[str] = None
         try:
             async for chunk in upstream_response.aiter_bytes():
                 collected_chunks.append(chunk.decode("utf-8", errors="replace"))
                 yield chunk
-
-            latency_ms = (time.monotonic() - start_time) * 1000
-            log_exchange(
-                api_style,
-                request_id,
-                request_data if request_data is not None else body,
-                {
-                    "chunks": collected_chunks,
-                    "upstream_status_code": upstream_response.status_code,
-                },
-                latency_ms,
-                True,
-                request_headers=incoming_headers,
-            )
-        except Exception as e:
-            latency_ms = (time.monotonic() - start_time) * 1000
-            log_exchange(
-                api_style,
-                request_id,
-                request_data if request_data is not None else body,
-                {
-                    "chunks": collected_chunks,
-                    "error": str(e),
-                    "upstream_status_code": upstream_response.status_code,
-                },
-                latency_ms,
-                True,
-                error=str(e),
-                request_headers=incoming_headers,
-            )
+        except BaseException as e:
+            stream_error = _sanitize_error_message(e, sensitive_values)
             raise
         finally:
+            latency_ms = (time.monotonic() - start_time) * 1000
+            response_data: Dict[str, Any] = {
+                "chunks": collected_chunks,
+                "upstream_status_code": upstream_response.status_code,
+            }
+            if stream_error:
+                response_data["error"] = stream_error
+            log_exchange(
+                api_style,
+                request_id,
+                request_data if request_data is not None else body,
+                response_data,
+                latency_ms,
+                True,
+                error=stream_error,
+                request_headers=incoming_headers,
+            )
             await upstream_response.aclose()
             await client.aclose()
 
-    hop_by_hop_headers = {
-        "connection",
-        "keep-alive",
-        "proxy-authenticate",
-        "proxy-authorization",
-        "te",
-        "trailers",
-        "transfer-encoding",
-        "upgrade",
-        "content-length",
-    }
-    response_headers = {
-        key: value
-        for key, value in upstream_response.headers.items()
-        if key.lower() not in hop_by_hop_headers
-    }
-    upstream_content_type = response_headers.pop("content-type", None)
+    response_headers = _safe_response_headers(upstream_response.headers)
+    upstream_content_type = _pop_header(response_headers, "content-type")
     media_type = upstream_content_type or (
         "text/event-stream" if stream_format == "sse" else "application/json"
     )

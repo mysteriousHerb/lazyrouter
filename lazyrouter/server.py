@@ -56,6 +56,7 @@ from .retry_handler import (
     RETRY_MULTIPLIER,
     MAX_FALLBACK_MODELS,
 )
+from .model_normalization import normalize_requested_model
 
 # Configure logging
 logging.basicConfig(
@@ -75,23 +76,7 @@ health_checker: HealthChecker = None
 
 def _normalize_requested_model(model_name: str, available_models: Dict[str, Any]) -> str:
     """Normalize provider-prefixed model ids (e.g. lazyrouter/auto)."""
-    normalized = (model_name or "").strip()
-    if not normalized:
-        return normalized
-
-    if normalized.lower() == "auto":
-        return "auto"
-
-    # Accept namespaced model ids used by some OpenAI-compatible clients,
-    # e.g. "lazyrouter/auto" or "provider/model-name".
-    if "/" in normalized:
-        suffix = normalized.rsplit("/", 1)[-1].strip()
-        if suffix.lower() == "auto":
-            return "auto"
-        if suffix in available_models and normalized not in available_models:
-            return suffix
-
-    return normalized
+    return normalize_requested_model(model_name, available_models)
 
 
 def _model_prefix(selected_model: str) -> str:
