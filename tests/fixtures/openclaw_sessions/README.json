@@ -1,0 +1,25 @@
+{
+  "description": "Summary of captured OpenClaw sessions from test_proxy",
+  "capture_date": "2026-02-16",
+  "total_exchanges": 18,
+  "by_api_style": {
+    "anthropic": 5,
+    "openai_completions": 4,
+    "openai_responses": 2,
+    "gemini": 7
+  },
+  "tool_calling_scenarios": [
+    {
+      "fixture": "anthropic_tool_call_system_time.json",
+      "description": "Complete 2-step flow: tool call request + tool result continuation",
+      "user_request": "do a tool call, find system time",
+      "steps": 2
+    },
+    {
+      "fixture": "openai_tool_call_system_time.json",
+      "description": "Single-step tool call request",
+      "user_request": "do a tool call to find system time",
+      "steps": 1
+    }
+  ]
+}
