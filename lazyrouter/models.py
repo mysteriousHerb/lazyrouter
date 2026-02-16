@@ -1,6 +1,6 @@
 """Pydantic models for OpenAI-compatible API requests and responses"""
 
-from typing import Any, List, Optional, Union
+from typing import Any, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict
 
@@ -111,7 +111,9 @@ class HealthCheckResult(BaseModel):
     is_router: bool = False
     status: str  # "ok" or "error"
     ttft_ms: Optional[float] = None
-    ttft_source: Optional[str] = None  # stream_text | stream_event | unavailable_non_stream
+    ttft_source: Optional[
+        Literal["stream_text", "stream_event", "unavailable_non_stream"]
+    ] = None
     ttft_unavailable_reason: Optional[str] = None
     total_ms: Optional[float] = None
     error: Optional[str] = None

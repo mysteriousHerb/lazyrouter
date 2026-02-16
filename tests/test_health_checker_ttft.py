@@ -9,6 +9,9 @@ class _StreamingProvider:
         self._delay = delay
 
     async def chat_completion(self, *args, **kwargs):
+        if not kwargs.get("stream", False):
+            return {"ok": True}
+
         async def _gen():
             for chunk in self._chunks:
                 await asyncio.sleep(self._delay)

@@ -187,6 +187,8 @@ async def check_model_health(
             actual_model,
             _compact_error(stream_error),
         )
+        # Force TTFT fields to match the non-stream fallback source.
+        ttft_ms = None
         ttft_source = "unavailable_non_stream"
         ttft_unavailable_reason = _compact_error(stream_error)
         try:
