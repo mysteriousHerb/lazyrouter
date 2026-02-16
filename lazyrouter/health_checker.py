@@ -22,7 +22,8 @@ BENCH_TEMPERATURE = 0.0
 
 def _compact_error(error: Exception, limit: int = 240) -> str:
     """Return a one-line, bounded error summary for logs."""
-    text = str(error).strip().splitlines()[0] if str(error).strip() else repr(error)
+    error_str = str(error).strip()
+    text = error_str.splitlines()[0] if error_str else repr(error)
     return text if len(text) <= limit else f"{text[:limit]}..."
 
 
@@ -131,7 +132,7 @@ class LiteLLMWrapper:
 async def check_model_health(
     name: str, provider, actual_model: str, provider_name: str, is_router: bool = False
 ) -> HealthCheckResult:
-    """Check health of a single model using one streaming request."""
+    """Check health using a streaming probe, with non-stream fallback."""
     ttft_ms = None
     ttft_source = None
     ttft_unavailable_reason = None
