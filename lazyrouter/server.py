@@ -48,6 +48,7 @@ from .tool_cache import (
     tool_cache_clear_session,
     tool_cache_set,
 )
+from .usage_logger import estimate_tokens
 from .retry_handler import (
     is_retryable_error,
     select_fallback_models,
@@ -55,6 +56,7 @@ from .retry_handler import (
     RETRY_MULTIPLIER,
     MAX_FALLBACK_MODELS,
 )
+from .model_normalization import normalize_requested_model
 
 # Configure logging
 logging.basicConfig(
@@ -69,6 +71,11 @@ logger = logging.getLogger(__name__)
 config: Config = None
 router: LLMRouter = None
 health_checker: HealthChecker = None
+
+
+def _normalize_requested_model(model_name: str, available_models: Dict[str, Any]) -> str:
+    """Normalize provider-prefixed model ids (e.g. lazyrouter/auto)."""
+    return normalize_requested_model(model_name, available_models)
 
 
 def _configure_logging(debug: bool) -> None:
@@ -256,16 +263,79 @@ def create_app(
                         cleared_tool,
                         session_key,
                     )
+            last_user_text = " ".join(last_user_text_raw.split())
+            if len(last_user_text) > 420:
+                last_user_text = last_user_text[:420] + "..."
             tool_name_by_id = tool_call_name_by_id(messages)
+            all_tool_results = [
+                m for m in messages if m.get("role") == "tool" and m.get("tool_call_id")
+            ]
             incoming_tool_results = collect_trailing_tool_results(messages)
             is_tool_continuation_turn = bool(incoming_tool_results)
+
+            # One-line request log with user query for easier debugging/copying.
+            tool_suffix = (
+                f" (tool continuation: {len(incoming_tool_results)} results)"
+                if is_tool_continuation_turn
+                else ""
+            )
+            requested_model = request.model
+            resolved_model = _normalize_requested_model(requested_model, config.llms)
+            logger.debug(
+                "[request] model=%s resolved_model=%s session=%s user=%s%s",
+                requested_model,
+                resolved_model,
+                session_key or "no-session",
+                last_user_text,
+                tool_suffix,
+            )
+
+            if all_tool_results:
+                in_names = sorted(
+                    {
+                        (
+                            m.get("name")
+                            if isinstance(m.get("name"), str) and m.get("name")
+                            else tool_name_by_id.get(
+                                str(m.get("tool_call_id", "")).strip()
+                            )
+                        )
+                        for m in all_tool_results
+                        if (isinstance(m.get("name"), str) and m.get("name"))
+                        or tool_name_by_id.get(str(m.get("tool_call_id", "")).strip())
+                    }
+                )
+                empty_results = sum(
+                    1
+                    for m in all_tool_results
+                    if not content_to_text(m.get("content")).strip()
+                )
+                logger.debug(
+                    "[tool-results-in] continuation=%s trailing=%s total=%s names=%s empty=%s",
+                    is_tool_continuation_turn,
+                    len(incoming_tool_results),
+                    len(all_tool_results),
+                    in_names,
+                    empty_results,
+                )
+                if incoming_tool_results:
+                    incoming_tool_text = "\n".join(
+                        content_to_text(m.get("content")) for m in incoming_tool_results
+                    )
+                    logger.info(
+                        "[tool-results-size] trailing=%s chars=%s tokens~%s",
+                        len(incoming_tool_results),
+                        len(incoming_tool_text),
+                        estimate_tokens(incoming_tool_text),
+                    )
+            else:
+                in_names = []
 
             # Determine which model to use
             routing_response = None
             routing_result = None
             router_skipped_reason = None
-            routing_reasoning = None
-            if request.model == "auto":
+            if resolved_model == "auto":
                 selected_model = None
 
                 # Check for healthy models with backoff retry until next health check
@@ -357,7 +427,7 @@ def create_app(
                     routing_reasoning = routing_result.reasoning
             else:
                 # Use specified model
-                selected_model = request.model
+                selected_model = resolved_model
                 logger.info(f"Using specified model: {selected_model}")
 
             # Get model config for selected model (shared validation for auto + specified paths).
