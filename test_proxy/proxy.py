@@ -17,7 +17,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, AsyncGenerator, Dict, Optional
 from urllib.parse import unquote
 
 import httpx
@@ -26,6 +26,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
 from lazyrouter.config import Config, load_config
+from lazyrouter.error_logger import sanitize_for_log
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -90,6 +91,18 @@ def get_provider_config(api_style: str) -> tuple[str, Optional[str], str]:
     raise ValueError(f"No provider found with api_style={api_style}")
 
 
+def get_provider_config_by_name(provider_name: str) -> tuple[str, Optional[str], str]:
+    """Get API key, base URL, and api_style for a provider by provider name."""
+    if config is None:
+        raise RuntimeError("Config not loaded")
+
+    if provider_name not in config.providers:
+        raise ValueError(f"Provider '{provider_name}' not found in configuration")
+
+    prov = config.providers[provider_name]
+    return prov.api_key, prov.base_url, prov.api_style
+
+
 def api_style_matches(preferred_api_style: str, provider_api_style: str) -> bool:
     """Check whether a provider style can serve a preferred endpoint style."""
     preferred = preferred_api_style.lower().strip()
@@ -123,7 +136,9 @@ def get_provider_for_model(
                     continue
                 provider_style = config.providers[provider_name].api_style
                 if api_style_matches(preferred_api_style, provider_style):
-                    api_key, base_url, api_style = get_provider_config(provider_style)
+                    api_key, base_url, api_style = get_provider_config_by_name(
+                        provider_name
+                    )
                     return api_key, base_url, api_style, llm_config.model
             if require_preferred_style:
                 raise ValueError(
@@ -135,12 +150,12 @@ def get_provider_for_model(
         first_llm = config.llms[first_llm_key]
         provider_name = first_llm.provider
         if provider_name in config.providers:
-            prov = config.providers[provider_name]
-            api_key, base_url, api_style = get_provider_config(prov.api_style)
+            api_key, base_url, api_style = get_provider_config_by_name(provider_name)
             return api_key, base_url, api_style, first_llm.model
 
     # Find the model's provider and its api_style
     target_api_style = None
+    target_provider_name = None
     actual_model = model_name
 
     # Check if model_name matches a configured LLM key
@@ -149,6 +164,7 @@ def get_provider_for_model(
         provider_name = llm_config.provider
         actual_model = llm_config.model  # Use the actual model string
         if provider_name in config.providers:
+            target_provider_name = provider_name
             target_api_style = config.providers[provider_name].api_style
 
     # Fallback: check if model_name matches the 'model' field in any llm
@@ -157,11 +173,12 @@ def get_provider_for_model(
             if llm_config.model == model_name:
                 provider_name = llm_config.provider
                 if provider_name in config.providers:
+                    target_provider_name = provider_name
                     target_api_style = config.providers[provider_name].api_style
                     break
 
-    # If we found the api_style, get first provider with that style
-    if target_api_style:
+    # If we found the model's provider, use that exact provider config.
+    if target_provider_name and target_api_style:
         if (
             preferred_api_style
             and require_preferred_style
@@ -170,7 +187,7 @@ def get_provider_for_model(
             raise ValueError(
                 f"Model '{model_name}' uses api_style='{target_api_style}' and does not match required api_style='{preferred_api_style}'"
             )
-        api_key, base_url, api_style = get_provider_config(target_api_style)
+        api_key, base_url, api_style = get_provider_config_by_name(target_provider_name)
         return api_key, base_url, api_style, actual_model
 
     # Final fallback: guess by model name prefix
@@ -230,15 +247,32 @@ def log_exchange(
     request_headers: Optional[Dict[str, str]] = None,
 ) -> None:
     """Log a request/response exchange to JSONL."""
+    redacted_headers: Optional[Dict[str, str]] = None
+    if request_headers is not None:
+        sensitive_header_keys = {
+            "authorization",
+            "x-api-key",
+            "x-goog-api-key",
+            "cookie",
+            "set-cookie",
+            "proxy-authorization",
+        }
+        redacted_headers = {}
+        for key, value in request_headers.items():
+            if key.lower() in sensitive_header_keys:
+                redacted_headers[key] = "[REDACTED]"
+            else:
+                redacted_headers[key] = value
+
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "request_id": request_id,
         "api_style": api_style,
         "is_stream": is_stream,
         "latency_ms": round(latency_ms, 2),
-        "request": request_data,
-        "request_headers": request_headers,
-        "response": response_data,
+        "request": sanitize_for_log(request_data),
+        "request_headers": redacted_headers,
+        "response": sanitize_for_log(response_data),
         "error": error,
     }
 
@@ -344,7 +378,10 @@ async def openai_chat_completions(request: Request):
         try:
             resp = await client.post(url, headers=req_headers, json=body)
             latency_ms = (time.monotonic() - start_time) * 1000
-            response_data = resp.json()
+            try:
+                response_data = resp.json()
+            except Exception:
+                response_data = resp.text
             log_exchange(
                 "openai_completions",
                 request_id,
@@ -543,7 +580,10 @@ async def anthropic_messages(request: Request):
         try:
             resp = await client.post(url, headers=req_headers, json=body)
             latency_ms = (time.monotonic() - start_time) * 1000
-            response_data = resp.json()
+            try:
+                response_data = resp.json()
+            except Exception:
+                response_data = resp.text
             log_exchange(
                 "anthropic",
                 request_id,
@@ -833,42 +873,93 @@ async def _proxy_stream(
 ) -> StreamingResponse:
     """Proxy a streaming request and log all chunks."""
     collected_chunks = []
+    client = httpx.AsyncClient(timeout=120.0)
 
-    async def stream_generator():
+    try:
+        upstream_request = client.build_request("POST", url, headers=headers, json=body)
+        upstream_response = await client.send(upstream_request, stream=True)
+    except Exception as e:
+        await client.aclose()
+        latency_ms = (time.monotonic() - start_time) * 1000
+        log_exchange(
+            api_style,
+            request_id,
+            request_data if request_data is not None else body,
+            None,
+            latency_ms,
+            True,
+            error=str(e),
+            request_headers=incoming_headers,
+        )
+        raise
+
+    async def stream_generator() -> AsyncGenerator[bytes, None]:
         nonlocal collected_chunks
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                async with client.stream("POST", url, headers=headers, json=body) as resp:
-                    async for chunk in resp.aiter_bytes():
-                        collected_chunks.append(chunk.decode("utf-8", errors="replace"))
-                        yield chunk
+            async for chunk in upstream_response.aiter_bytes():
+                collected_chunks.append(chunk.decode("utf-8", errors="replace"))
+                yield chunk
 
-                    latency_ms = (time.monotonic() - start_time) * 1000
-                    log_exchange(
-                        api_style,
-                        request_id,
-                        request_data if request_data is not None else body,
-                        {"chunks": collected_chunks},
-                        latency_ms,
-                        True,
-                        request_headers=incoming_headers,
-                    )
+            latency_ms = (time.monotonic() - start_time) * 1000
+            log_exchange(
+                api_style,
+                request_id,
+                request_data if request_data is not None else body,
+                {
+                    "chunks": collected_chunks,
+                    "upstream_status_code": upstream_response.status_code,
+                },
+                latency_ms,
+                True,
+                request_headers=incoming_headers,
+            )
         except Exception as e:
             latency_ms = (time.monotonic() - start_time) * 1000
             log_exchange(
                 api_style,
                 request_id,
                 request_data if request_data is not None else body,
-                {"chunks": collected_chunks, "error": str(e)},
+                {
+                    "chunks": collected_chunks,
+                    "error": str(e),
+                    "upstream_status_code": upstream_response.status_code,
+                },
                 latency_ms,
                 True,
                 error=str(e),
                 request_headers=incoming_headers,
             )
             raise
+        finally:
+            await upstream_response.aclose()
+            await client.aclose()
 
-    media_type = "text/event-stream" if stream_format == "sse" else "application/json"
-    return StreamingResponse(stream_generator(), media_type=media_type)
+    hop_by_hop_headers = {
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailers",
+        "transfer-encoding",
+        "upgrade",
+        "content-length",
+    }
+    response_headers = {
+        key: value
+        for key, value in upstream_response.headers.items()
+        if key.lower() not in hop_by_hop_headers
+    }
+    upstream_content_type = response_headers.pop("content-type", None)
+    media_type = upstream_content_type or (
+        "text/event-stream" if stream_format == "sse" else "application/json"
+    )
+    return StreamingResponse(
+        stream_generator(),
+        status_code=upstream_response.status_code,
+        headers=response_headers,
+        media_type=media_type,
+    )
 
 
 # =============================================================================
