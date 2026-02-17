@@ -218,7 +218,12 @@ def test_gemini_tool_call_system_time_step1():
 
     # Check for functionCall in response
     has_function_call = any(
-        "functionCall" in str(chunk) or "function_call" in str(chunk)
+        any(
+            "functionCall" in part or "function_call" in part
+            for candidate in chunk.get("candidates", [])
+            for part in candidate.get("content", {}).get("parts", [])
+            if isinstance(part, dict)
+        )
         for chunk in chunks
     )
     assert has_function_call, "Response should contain functionCall"
@@ -241,7 +246,12 @@ def test_gemini_tool_call_system_time_step2():
 
     # Check for text content in response (final answer after tool execution)
     has_text = any(
-        "text" in str(chunk)
+        any(
+            "text" in part
+            for candidate in chunk.get("candidates", [])
+            for part in candidate.get("content", {}).get("parts", [])
+            if isinstance(part, dict)
+        )
         for chunk in chunks
     )
     assert has_text, "Response should contain text content after processing tool results"

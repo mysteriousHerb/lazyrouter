@@ -153,6 +153,36 @@ To capture more real-world scenarios:
 }
 ```
 
+### Gemini Format (2-step flow)
+
+```json
+{
+  "description": "...",
+  "api_style": "gemini",
+  "step1_request": {
+    "path": "models/auto:streamGenerateContent",
+    "resolved_path": "models/gemini-3-flash-preview:streamGenerateContent",
+    "body": {
+      "contents": [...],
+      "tools": [{"function_declarations": [...]}],
+      "systemInstruction": {...}
+    }
+  },
+  "step1_response_chunks": ["...", "..."],
+  "step1_latency_ms": 1234.56,
+  "step2_request": {
+    "path": "models/auto:streamGenerateContent",
+    "resolved_path": "models/gemini-3-flash-preview:streamGenerateContent",
+    "body": {
+      "contents": [...],  // includes functionCall and functionResponse
+      "tools": [{"function_declarations": [...]}]
+    }
+  },
+  "step2_response_chunks": ["...", "..."],
+  "step2_latency_ms": 2345.67
+}
+```
+
 ## Notes
 
 - **Fixtures are minimized:** System prompts and conversation history have been reduced to minimal versions for faster testing and PII safety. Response chunks are preserved from real OpenClaw sessions.

@@ -233,9 +233,9 @@ def minimize_gemini_fixture():
     function_call_content = None
     function_response_content = None
     for content in step2_body["contents"]:
-        if content["role"] == "model" and any("functionCall" in str(p) for p in content.get("parts", [])):
+        if content["role"] == "model" and any("functionCall" in p for p in content.get("parts", []) if isinstance(p, dict)):
             function_call_content = content
-        if content["role"] == "user" and any("functionResponse" in str(p) for p in content.get("parts", [])):
+        if content["role"] == "user" and any("functionResponse" in p for p in content.get("parts", []) if isinstance(p, dict)):
             function_response_content = content
 
     if function_call_content is None or function_response_content is None:
