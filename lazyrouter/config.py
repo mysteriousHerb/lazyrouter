@@ -39,6 +39,7 @@ class RouterConfig(BaseModel):
     context_messages: Optional[int] = (
         None  # Number of recent messages to include (None = last user message only)
     )
+    prompt: Optional[str] = None  # Custom routing prompt (overrides default)
 
 
 class ModelConfig(BaseModel):

@@ -75,6 +75,34 @@ uv run python main.py --config config.yaml
 - `llms` 中的 `coding_elo` / `writing_elo` 是质量信号，可以从 `https://arena.ai/leaderboard` 获取。
 - `context_compression` 控制在长时间智能体运行期间如何积极地修剪旧历史记录，以控制 token 使用和成本。
 
+### 自定义路由提示词
+
+你可以通过在配置文件的 `router` 部分添加 `prompt` 字段来覆盖默认的路由提示词：
+
+```yaml
+router:
+  provider: gemini
+  model: "gemini-2.5-flash"
+  prompt: |
+    你是一个模型路由器。为用户的请求选择最合适的模型。
+    如果用户明确请求特定模型，请遵循该请求。
+    可用模型：{model_descriptions}
+    上下文：{context}
+    当前请求：{current_request}
+    请给出推理和模型选择。
+```
+
+提示词必须包含这些占位符：`{model_descriptions}`、`{context}` 和 `{current_request}`。
+
+### 用户指定路由
+
+默认路由提示词现在支持用户的明确模型请求。你可以说：
+- "用 opus 处理这个任务"
+- "路由到 gemini-2.5-pro"
+- "切换到 claude-sonnet"
+
+路由器会遵循这些明确的请求，将任务路由到指定的模型。
+
 ## OpenClaw 集成
 
 编辑你的 `.openclaw/openclaw.json`，在 `models.providers` 下添加 LazyRouter 提供商：
