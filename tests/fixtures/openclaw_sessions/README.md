@@ -25,10 +25,11 @@ These fixtures contain actual request/response pairs from OpenClaw agent session
 - `step2_response_chunks`: Final response after processing tool results
 
 **Key Features:**
-- 23 tools available (OpenClaw's full toolkit)
-- Large system prompt (~7KB) with skills, memory, identity
-- Anthropic-specific features: cache_control, tool_use/tool_result format
-- Multi-turn conversation context
+- Minimal system prompt (generic assistant prompt)
+- 2 minimal tool definitions (get_weather, get_time)
+- Simplified conversation history (essential messages only)
+- Real response chunks preserved from actual OpenClaw session
+- Anthropic-specific features: tool_use/tool_result format
 
 ### `openai_tool_call_system_time.json`
 
@@ -43,9 +44,11 @@ These fixtures contain actual request/response pairs from OpenClaw agent session
 - `response_chunks`: Streaming response chunks
 
 **Key Features:**
-- 23 tools in OpenAI function format
-- Large system prompt with OpenClaw context
-- 11 messages in conversation history
+- Minimal system prompt (generic assistant prompt)
+- 2 minimal tool definitions (get_weather, get_time)
+- Simplified conversation history (essential messages only)
+- Real response chunks preserved from actual OpenClaw session
+- OpenAI function calling format
 
 ## Usage
 
@@ -100,10 +103,11 @@ To capture more real-world scenarios:
    - Multi-turn conversations
    - Error cases
 
-4. **Extract fixtures** from logs:
+4. **Extract and minimize fixtures** from logs:
    ```bash
    # Logs are in logs/test_proxy/*.jsonl
-   python scripts/extract_fixtures.py logs/test_proxy/anthropic_2026-02-16.jsonl
+   # Extract fixtures manually or use scripts/minimize_fixtures.py to reduce size
+   python scripts/minimize_fixtures.py
    ```
 
 ## Fixture Format
@@ -151,10 +155,10 @@ To capture more real-world scenarios:
 
 ## Notes
 
-- **System prompts are large:** OpenClaw includes extensive context (skills, memory, identity) in the system prompt. This is realistic for agent workflows.
+- **Fixtures are minimized:** System prompts and conversation history have been reduced to minimal versions for faster testing and PII safety. Response chunks are preserved from real OpenClaw sessions.
 - **Sensitive data redacted:** API keys and personal information are redacted by test_proxy before logging.
 - **Streaming format:** All captured responses are in streaming format (SSE for OpenAI, event stream for Anthropic).
-- **Tool definitions:** Fixtures include the full set of tools available to OpenClaw (23 tools including read, write, exec, web_search, etc.).
+- **Tool definitions:** Fixtures include 2 minimal tool definitions (get_weather, get_time) sufficient for testing tool-calling behavior.
 
 ## Test Coverage
 
