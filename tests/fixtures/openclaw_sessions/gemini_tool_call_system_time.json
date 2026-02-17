@@ -45,12 +45,28 @@
               }
             },
             {
-              "name": "get_time",
-              "description": "Get current system time",
+              "name": "session_status",
+              "description": "Get current session status and system information",
               "parameters": {
                 "type": "object",
                 "properties": {},
                 "required": []
+              }
+            },
+            {
+              "name": "exec",
+              "description": "Execute a shell command",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "command": {
+                    "type": "string",
+                    "description": "Shell command to execute"
+                  }
+                },
+                "required": [
+                  "command"
+                ]
               }
             }
           ]
@@ -99,7 +115,7 @@
               "functionResponse": {
                 "name": "session_status",
                 "response": {
-                  "output": "🦞 OpenClaw 2026.2.15 (3fe22ea)\n🕒 Time: Monday, February 16th, 2026 — 11:17 PM (UTC)\n🧠 Model: lazyrouter-test/auto · 🔑 api-key not-…eded (models.json)\n🧮 Tokens: 14k in / 463 out\n📚 Context: 14k/200k (7%) · 🧹 Compactions: 0\n🧵 Session: agent:lazyrouter-tester:telegram:lazyrouter-tester:direct:6894812299 • updated just now\n⚙️ Runtime: direct · Think: off · elevated\n🪢 Queue: collect (depth 0)"
+                  "output": "🦞 OpenClaw 2026.2.15 (3fe22ea)\n🕒 Time: Monday, February 16th, 2026 — 11:17 PM (UTC)\n🧠 Model: lazyrouter-test/auto · 🔑 api-key not-…eded (models.json)\n🧮 Tokens: 14k in / 463 out\n📚 Context: 14k/200k (7%) · 🧹 Compactions: 0\n🧵 Session: agent:lazyrouter-tester:telegram:lazyrouter-tester:direct:0000000000 • updated just now\n⚙️ Runtime: direct · Think: off · elevated\n🪢 Queue: collect (depth 0)"
                 }
               }
             }
@@ -135,12 +151,28 @@
               }
             },
             {
-              "name": "get_time",
-              "description": "Get current system time",
+              "name": "session_status",
+              "description": "Get current session status and system information",
               "parameters": {
                 "type": "object",
                 "properties": {},
                 "required": []
+              }
+            },
+            {
+              "name": "exec",
+              "description": "Execute a shell command",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "command": {
+                    "type": "string",
+                    "description": "Shell command to execute"
+                  }
+                },
+                "required": [
+                  "command"
+                ]
               }
             }
           ]

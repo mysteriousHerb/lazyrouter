@@ -40,12 +40,19 @@
         }
       },
       {
-        "name": "get_time",
-        "description": "Get current system time",
+        "name": "exec",
+        "description": "Execute a shell command",
         "input_schema": {
           "type": "object",
-          "properties": {},
-          "required": []
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "Shell command to execute"
+            }
+          },
+          "required": [
+            "command"
+          ]
         }
       }
     ]
@@ -125,12 +132,19 @@
         }
       },
       {
-        "name": "get_time",
-        "description": "Get current system time",
+        "name": "exec",
+        "description": "Execute a shell command",
         "input_schema": {
           "type": "object",
-          "properties": {},
-          "required": []
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "Shell command to execute"
+            }
+          },
+          "required": [
+            "command"
+          ]
         }
       }
     ]

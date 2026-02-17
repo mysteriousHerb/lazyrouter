@@ -26,7 +26,7 @@ These fixtures contain actual request/response pairs from OpenClaw agent session
 
 **Key Features:**
 - Minimal system prompt (generic assistant prompt)
-- 2 minimal tool definitions (get_weather, get_time)
+- 2 minimal tool definitions (get_weather, exec)
 - Simplified conversation history (essential messages only)
 - Real response chunks preserved from actual OpenClaw session
 - Anthropic-specific features: tool_use/tool_result format
@@ -45,7 +45,7 @@ These fixtures contain actual request/response pairs from OpenClaw agent session
 
 **Key Features:**
 - Minimal system prompt (generic assistant prompt)
-- 2 minimal tool definitions (get_weather, get_time)
+- 2 minimal tool definitions (get_weather, exec)
 - Simplified conversation history (essential messages only)
 - Real response chunks preserved from actual OpenClaw session
 - OpenAI function calling format
@@ -156,9 +156,9 @@ To capture more real-world scenarios:
 ## Notes
 
 - **Fixtures are minimized:** System prompts and conversation history have been reduced to minimal versions for faster testing and PII safety. Response chunks are preserved from real OpenClaw sessions.
-- **Sensitive data redacted:** API keys and personal information are redacted by test_proxy before logging.
+- **Sensitive data redacted:** API keys, personal information, and chat IDs are redacted.
 - **Streaming format:** All captured responses are in streaming format (SSE for OpenAI, event stream for Anthropic).
-- **Tool definitions:** Fixtures include 2 minimal tool definitions (get_weather, get_time) sufficient for testing tool-calling behavior.
+- **Tool definitions:** Fixtures include minimal tool definitions (get_weather, exec, session_status) sufficient for testing tool-calling behavior.
 
 ## Test Coverage
 

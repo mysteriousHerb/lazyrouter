@@ -42,12 +42,19 @@
       {
         "type": "function",
         "function": {
-          "name": "get_time",
-          "description": "Get current system time",
+          "name": "exec",
+          "description": "Execute a shell command",
           "parameters": {
             "type": "object",
-            "properties": {},
-            "required": []
+            "properties": {
+              "command": {
+                "type": "string",
+                "description": "Shell command to execute"
+              }
+            },
+            "required": [
+              "command"
+            ]
           }
         }
       }

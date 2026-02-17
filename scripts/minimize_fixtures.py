@@ -31,12 +31,17 @@ MINIMAL_TOOLS_ANTHROPIC = [
         }
     },
     {
-        "name": "get_time",
-        "description": "Get current system time",
+        "name": "exec",
+        "description": "Execute a shell command",
         "input_schema": {
             "type": "object",
-            "properties": {},
-            "required": []
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "Shell command to execute"
+                }
+            },
+            "required": ["command"]
         }
     }
 ]
@@ -62,12 +67,17 @@ MINIMAL_TOOLS_OPENAI = [
     {
         "type": "function",
         "function": {
-            "name": "get_time",
-            "description": "Get current system time",
+            "name": "exec",
+            "description": "Execute a shell command",
             "parameters": {
                 "type": "object",
-                "properties": {},
-                "required": []
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Shell command to execute"
+                    }
+                },
+                "required": ["command"]
             }
         }
     }
@@ -89,12 +99,26 @@ MINIMAL_TOOLS_GEMINI = [
         }
     },
     {
-        "name": "get_time",
-        "description": "Get current system time",
+        "name": "session_status",
+        "description": "Get current session status and system information",
         "parameters": {
             "type": "object",
             "properties": {},
             "required": []
+        }
+    },
+    {
+        "name": "exec",
+        "description": "Execute a shell command",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "Shell command to execute"
+                }
+            },
+            "required": ["command"]
         }
     }
 ]
@@ -131,6 +155,9 @@ def minimize_anthropic_fixture():
             tool_use_msg = msg
         if msg["role"] == "user" and any(c.get("type") == "tool_result" for c in msg.get("content", [])):
             tool_result_msg = msg
+
+    if tool_use_msg is None or tool_result_msg is None:
+        raise ValueError("Could not find expected tool_use or tool_result messages in Anthropic fixture")
 
     step2["messages"] = [
         {"role": "user", "content": [{"type": "text", "text": "do a tool call, find system time"}]},
@@ -210,6 +237,21 @@ def minimize_gemini_fixture():
             function_call_content = content
         if content["role"] == "user" and any("functionResponse" in str(p) for p in content.get("parts", [])):
             function_response_content = content
+
+    if function_call_content is None or function_response_content is None:
+        raise ValueError("Could not find expected functionCall or functionResponse in Gemini fixture")
+
+    # Redact PII from functionResponse (Telegram chat IDs, etc.)
+    for part in function_response_content.get("parts", []):
+        if "functionResponse" in part:
+            response_data = part["functionResponse"].get("response", {})
+            if "output" in response_data:
+                # Replace Telegram chat IDs with placeholder
+                output = response_data["output"]
+                import re
+                output = re.sub(r'telegram:\d+', 'telegram:0000000000', output)
+                output = re.sub(r'direct:\d+', 'direct:0000000000', output)
+                response_data["output"] = output
 
     step2_body["contents"] = [
         {"role": "user", "parts": [{"text": "hi can you do a tool call, like find system time and memory usage"}]},

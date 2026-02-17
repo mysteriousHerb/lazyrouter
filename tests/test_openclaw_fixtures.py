@@ -132,8 +132,8 @@ def test_anthropic_tool_call_system_time_step1():
     base_url = os.getenv("LAZYROUTER_TEST_URL", DEFAULT_BASE_URL)
     fixture = load_fixture("anthropic_tool_call_system_time.json")
 
-    client = httpx.Client()
-    chunks = send_anthropic_request(client, base_url, fixture["step1_request"], stream=True)
+    with httpx.Client() as client:
+        chunks = send_anthropic_request(client, base_url, fixture["step1_request"], stream=True)
 
     assert chunks is not None, "Should receive streaming response"
     assert len(chunks) > 0, "Should have at least one chunk"
@@ -156,8 +156,8 @@ def test_anthropic_tool_call_system_time_step2():
     base_url = os.getenv("LAZYROUTER_TEST_URL", DEFAULT_BASE_URL)
     fixture = load_fixture("anthropic_tool_call_system_time.json")
 
-    client = httpx.Client()
-    chunks = send_anthropic_request(client, base_url, fixture["step2_request"], stream=True)
+    with httpx.Client() as client:
+        chunks = send_anthropic_request(client, base_url, fixture["step2_request"], stream=True)
 
     assert chunks is not None, "Should receive streaming response"
     assert len(chunks) > 0, "Should have at least one chunk"
@@ -184,8 +184,8 @@ def test_openai_tool_call_system_time():
     base_url = os.getenv("LAZYROUTER_TEST_URL", DEFAULT_BASE_URL)
     fixture = load_fixture("openai_tool_call_system_time.json")
 
-    client = httpx.Client()
-    chunks = send_openai_request(client, base_url, fixture["request"], stream=True)
+    with httpx.Client() as client:
+        chunks = send_openai_request(client, base_url, fixture["request"], stream=True)
 
     assert chunks is not None, "Should receive streaming response"
     assert len(chunks) > 0, "Should have at least one chunk"
@@ -226,8 +226,8 @@ def test_gemini_tool_call_system_time_step1():
     base_url = os.getenv("LAZYROUTER_TEST_URL", DEFAULT_BASE_URL)
     fixture = load_fixture("gemini_tool_call_system_time.json")
 
-    client = httpx.Client()
-    chunks = send_gemini_request(client, base_url, fixture["step1_request"], stream=True)
+    with httpx.Client() as client:
+        chunks = send_gemini_request(client, base_url, fixture["step1_request"], stream=True)
 
     assert chunks is not None, "Should receive streaming response"
     assert len(chunks) > 0, "Should have at least one chunk"
@@ -249,8 +249,8 @@ def test_gemini_tool_call_system_time_step2():
     base_url = os.getenv("LAZYROUTER_TEST_URL", DEFAULT_BASE_URL)
     fixture = load_fixture("gemini_tool_call_system_time.json")
 
-    client = httpx.Client()
-    chunks = send_gemini_request(client, base_url, fixture["step2_request"], stream=True)
+    with httpx.Client() as client:
+        chunks = send_gemini_request(client, base_url, fixture["step2_request"], stream=True)
 
     assert chunks is not None, "Should receive streaming response"
     assert len(chunks) > 0, "Should have at least one chunk"
