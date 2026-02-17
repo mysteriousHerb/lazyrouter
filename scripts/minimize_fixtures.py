@@ -241,7 +241,7 @@ def minimize_gemini_fixture():
     if function_call_content is None or function_response_content is None:
         raise ValueError("Could not find expected functionCall or functionResponse in Gemini fixture")
 
-    # Redact PII from functionResponse (Telegram chat IDs, etc.)
+    # Redact PII from functionResponse (Telegram chat IDs, usernames, etc.)
     for part in function_response_content.get("parts", []):
         if "functionResponse" in part:
             response_data = part["functionResponse"].get("response", {})
@@ -251,6 +251,9 @@ def minimize_gemini_fixture():
                 import re
                 output = re.sub(r'telegram:\d+', 'telegram:0000000000', output)
                 output = re.sub(r'direct:\d+', 'direct:0000000000', output)
+                # Replace usernames in paths
+                output = re.sub(r'/home/\w+/', '/home/testuser/', output)
+                output = re.sub(r'C:\\Users\\\w+\\', r'C:\\Users\\testuser\\', output)
                 response_data["output"] = output
 
     step2_body["contents"] = [

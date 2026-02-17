@@ -27,7 +27,8 @@ def load_fixture(filename: str) -> dict:
 def send_openai_request(client: httpx.Client, base_url: str, payload: dict, stream: bool = True):
     """Send OpenAI-format request and return response or chunks."""
     url = f"{base_url}/v1/chat/completions"
-    payload["stream"] = stream
+    # Create a copy to avoid mutating the original payload
+    payload = {**payload, "stream": stream}
 
     if not stream:
         resp = client.post(url, json=payload, timeout=120)
@@ -55,7 +56,8 @@ def send_openai_request(client: httpx.Client, base_url: str, payload: dict, stre
 def send_anthropic_request(client: httpx.Client, base_url: str, payload: dict, stream: bool = True):
     """Send Anthropic-format request and return response or chunks."""
     url = f"{base_url}/v1/messages"
-    payload["stream"] = stream
+    # Create a copy to avoid mutating the original payload
+    payload = {**payload, "stream": stream}
 
     headers = {
         "Content-Type": "application/json",
@@ -190,27 +192,9 @@ def test_openai_tool_call_system_time():
     assert chunks is not None, "Should receive streaming response"
     assert len(chunks) > 0, "Should have at least one chunk"
 
-    # Accumulate tool_calls from delta chunks
-    tool_calls_acc = {}
-    for chunk in chunks:
-        for choice in chunk.get("choices", []):
-            delta = choice.get("delta", {})
-            for tc in delta.get("tool_calls", []) or []:
-                idx = tc.get("index", 0)
-                if idx not in tool_calls_acc:
-                    tool_calls_acc[idx] = {"id": "", "name": "", "arguments": ""}
-                if tc.get("id"):
-                    tool_calls_acc[idx]["id"] = tc["id"]
-                fn = tc.get("function", {})
-                if fn.get("name"):
-                    tool_calls_acc[idx]["name"] = fn["name"]
-                if fn.get("arguments"):
-                    tool_calls_acc[idx]["arguments"] += fn["arguments"]
-
     # Note: The captured response might not have tool_calls if the model
     # chose to respond with text instead. This is valid behavior.
     # We just verify the request was processed successfully.
-    assert len(chunks) > 0, "Should process request successfully"
 
 
 # ============================================================================
@@ -319,3 +303,29 @@ def test_openai_fixture_structure():
     assert "tools" in fixture["request"]
     assert "response_chunks" in fixture
     assert len(fixture["response_chunks"]) > 0
+
+
+def test_gemini_fixture_structure():
+    """Validate Gemini fixture has expected structure."""
+    fixture = load_fixture("gemini_tool_call_system_time.json")
+
+    assert "description" in fixture
+    assert "api_style" in fixture
+    assert fixture["api_style"] == "gemini"
+
+    # Step 1
+    assert "step1_request" in fixture
+    assert "path" in fixture["step1_request"]
+    assert "body" in fixture["step1_request"]
+    assert "contents" in fixture["step1_request"]["body"]
+    assert "tools" in fixture["step1_request"]["body"]
+    assert "step1_response_chunks" in fixture
+    assert len(fixture["step1_response_chunks"]) > 0
+
+    # Step 2
+    assert "step2_request" in fixture
+    assert "body" in fixture["step2_request"]
+    assert "contents" in fixture["step2_request"]["body"]
+    assert len(fixture["step2_request"]["body"]["contents"]) > len(fixture["step1_request"]["body"]["contents"])
+    assert "step2_response_chunks" in fixture
+    assert len(fixture["step2_response_chunks"]) > 0
