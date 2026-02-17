@@ -173,6 +173,7 @@ async def check_model_health(
             actual_model=actual_model,
             is_router=is_router,
             status="ok",
+            is_healthy=None,  # Set later in run_check based on latency threshold
             ttft_ms=ttft_ms,
             ttft_source=ttft_source,
             ttft_unavailable_reason=ttft_unavailable_reason,
@@ -208,6 +209,7 @@ async def check_model_health(
                 actual_model=actual_model,
                 is_router=is_router,
                 status="ok",
+                is_healthy=None,  # Set later in run_check based on latency threshold
                 ttft_ms=None,
                 ttft_source=ttft_source,
                 ttft_unavailable_reason=ttft_unavailable_reason,
@@ -220,6 +222,7 @@ async def check_model_health(
                 actual_model=actual_model,
                 is_router=is_router,
                 status="error",
+                is_healthy=False,
                 ttft_ms=ttft_ms,
                 ttft_source=ttft_source,
                 ttft_unavailable_reason=ttft_unavailable_reason,
@@ -280,13 +283,18 @@ class HealthChecker:
         for i, r in enumerate(raw_results):
             name = model_names[i]
             if isinstance(r, HealthCheckResult):
-                results.append(r)
-                self.last_results[name] = r
-                if (
+                # Determine if model is healthy (available for routing)
+                is_healthy = (
                     r.status == "ok"
                     and r.total_ms is not None
                     and r.total_ms <= self.hc_config.max_latency_ms
-                ):
+                )
+                r.is_healthy = is_healthy
+
+                results.append(r)
+                self.last_results[name] = r
+
+                if is_healthy:
                     new_healthy.add(name)
                 else:
                     reason = (
@@ -304,6 +312,7 @@ class HealthChecker:
                     actual_model=mc.model,
                     is_router=False,
                     status="error",
+                    is_healthy=False,
                     error=err,
                 )
                 results.append(result)

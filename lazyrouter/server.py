@@ -25,7 +25,6 @@ from .message_utils import (
 from .model_normalization import normalize_requested_model
 from .models import (
     ChatCompletionRequest,
-    HealthCheckResponse,
     HealthCheckResult,
     HealthResponse,
     HealthStatusResponse,
@@ -1067,7 +1066,7 @@ def create_app(
             logger.error(f"Error processing request: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
 
-    @app.get("/v1/health-check", response_model=HealthCheckResponse)
+    @app.get("/v1/health-check", response_model=HealthStatusResponse)
     async def health_check_now(timeout: int = 30):
         """Run health check on all models now and return results."""
         from .health_checker import LiteLLMWrapper
@@ -1146,8 +1145,16 @@ def create_app(
                     )
                 )
 
-        return HealthCheckResponse(
-            timestamp=datetime.now(timezone.utc).isoformat(),
+        # Split into healthy/unhealthy based on is_healthy field
+        healthy = sorted([r.model for r in results if r.is_healthy is True])
+        unhealthy = sorted([r.model for r in results if r.is_healthy is not True])
+
+        return HealthStatusResponse(
+            interval=config.health_check.interval,
+            max_latency_ms=config.health_check.max_latency_ms,
+            last_check=datetime.now(timezone.utc).isoformat(),
+            healthy_models=healthy,
+            unhealthy_models=unhealthy,
             results=results,
         )
 
