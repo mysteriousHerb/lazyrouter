@@ -37,6 +37,13 @@ router:
   input_price: 0.5
   output_price: 3.0
   context_messages: 10
+  # prompt: |  # Optional: override the default routing prompt
+  #   You are a model router. Select the best model for the user's request.
+  #   If the user explicitly requests a specific model, honor that request.
+  #   Available models: {model_descriptions}
+  #   Context: {context}
+  #   Current request: {current_request}
+  #   Respond with reasoning and model choice.
 
 # Models that can be selected at runtime.
 # ELO source suggestion: https://arena.ai/leaderboard

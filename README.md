@@ -82,6 +82,34 @@ Use `config.example.yaml` as the base. API keys are loaded from `.env`.
 - `coding_elo` / `writing_elo` in `llms` are quality signals you can source from `https://arena.ai/leaderboard`.
 - `context_compression` controls how aggressively old history is trimmed to keep token usage/cost under control during long agent runs.
 
+### Custom Routing Prompt
+
+You can override the default routing prompt by adding a `prompt` field in the `router` section of your config:
+
+```yaml
+router:
+  provider: gemini
+  model: "gemini-2.5-flash"
+  prompt: |
+    You are a model router. Select the best model for the user's request.
+    If the user explicitly requests a specific model, honor that request.
+    Available models: {model_descriptions}
+    Context: {context}
+    Current request: {current_request}
+    Respond with reasoning and model choice.
+```
+
+The prompt must include these placeholders: `{model_descriptions}`, `{context}`, and `{current_request}`.
+
+### User-Directed Routing
+
+The default routing prompt now supports explicit model requests from users. You can say things like:
+- "Use opus for this task"
+- "Route to gemini-2.5-pro"
+- "Switch to claude-sonnet"
+
+The router will honor these explicit requests and route to the specified model.
+
 
 ## OpenClaw Integration
 

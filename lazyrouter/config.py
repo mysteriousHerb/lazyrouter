@@ -39,6 +39,26 @@ class RouterConfig(BaseModel):
     context_messages: Optional[int] = (
         None  # Number of recent messages to include (None = last user message only)
     )
+    prompt: Optional[str] = None  # Custom routing prompt (overrides default)
+
+    @model_validator(mode="after")
+    def validate_prompt_placeholders(self) -> "RouterConfig":
+        """Validate that custom prompt contains required placeholders"""
+        if self.prompt is not None:
+            required_placeholders = {"model_descriptions", "context", "current_request"}
+            # Check if all required placeholders are present
+            missing = []
+            for placeholder in required_placeholders:
+                if f"{{{placeholder}}}" not in self.prompt:
+                    missing.append(placeholder)
+
+            if missing:
+                raise ValueError(
+                    f"Custom routing prompt must contain these placeholders: "
+                    f"{', '.join(f'{{{p}}}' for p in missing)}"
+                )
+
+        return self
 
 
 class ModelConfig(BaseModel):

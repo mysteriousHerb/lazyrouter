@@ -48,6 +48,8 @@ ROUTING_PROMPT_TEMPLATE = """You are a model router. Analyze the user's query an
 Each model has an Elo rating from LMSys Chatbot Arena (higher = better quality) for coding and writing, plus pricing per 1M tokens.
 Prefer cheaper models for simple tasks. Only pick expensive, high-Elo models when the task genuinely needs top-tier quality.
 
+IMPORTANT: If the user explicitly requests a specific model (e.g., "use opus for this", "route to gemini-2.5-pro", "switch to claude-sonnet"), honor that request directly.
+
 Available models:
 {model_descriptions}
 
@@ -213,11 +215,24 @@ class LLMRouter:
         model_descriptions = self._build_model_descriptions(
             exclude_models=excluded_models
         )
-        routing_prompt = ROUTING_PROMPT_TEMPLATE.format(
-            model_descriptions=model_descriptions,
-            context=conversation_context,
-            current_request=current_request,
-        )
+
+        # Use custom prompt from config if provided, otherwise use default
+        prompt_template = self.config.router.prompt or ROUTING_PROMPT_TEMPLATE
+        try:
+            routing_prompt = prompt_template.format(
+                model_descriptions=model_descriptions,
+                context=conversation_context,
+                current_request=current_request,
+            )
+        except (KeyError, ValueError, IndexError) as fmt_err:
+            logger.warning(
+                f"Custom prompt format failed ({fmt_err}); falling back to default template"
+            )
+            routing_prompt = ROUTING_PROMPT_TEMPLATE.format(
+                model_descriptions=model_descriptions,
+                context=conversation_context,
+                current_request=current_request,
+            )
 
         # Combined context for logging
         full_context = f"{conversation_context}\n\nCURRENT: {current_request}"
