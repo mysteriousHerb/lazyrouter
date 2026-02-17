@@ -95,7 +95,5 @@ def main():
     else:
         # Reuse the already-loaded config to avoid parsing YAML/dotenv twice.
         # env_file still matters because it was applied in load_config above.
-        app = create_app(
-            args.config, env_file=args.env_file, preloaded_config=config
-        )
+        app = create_app(args.config, env_file=args.env_file, preloaded_config=config)
         uvicorn.run(app, host=host, port=port, log_level=log_level)

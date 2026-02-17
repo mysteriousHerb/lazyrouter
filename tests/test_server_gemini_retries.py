@@ -1,7 +1,7 @@
 import asyncio
 
-from lazyrouter.gemini_retries import call_router_with_gemini_fallback
 import lazyrouter.server as server_mod
+from lazyrouter.gemini_retries import call_router_with_gemini_fallback
 from lazyrouter.models import ChatCompletionRequest
 
 
@@ -18,7 +18,10 @@ class _FakeRouter:
                 "in GenerateContentRequest"
             )
 
-        return {"id": "ok", "choices": [{"message": {"role": "assistant", "content": "ok"}}]}
+        return {
+            "id": "ok",
+            "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+        }
 
 
 def _request(*, tool_choice=None) -> ChatCompletionRequest:
@@ -65,7 +68,9 @@ def test_call_router_with_gemini_fallback_retries_native_declarations(monkeypatc
     assert second_tools[0].get("function_declarations")
 
 
-def test_call_router_with_gemini_fallback_retries_without_tools_on_continuation(monkeypatch):
+def test_call_router_with_gemini_fallback_retries_without_tools_on_continuation(
+    monkeypatch,
+):
     class _ContinuationRouter:
         def __init__(self):
             self.calls = []

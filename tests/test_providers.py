@@ -7,12 +7,11 @@ Run only when explicitly enabled:
 import asyncio
 import os
 
-import pytest
 import litellm
+import pytest
 
 from lazyrouter.config import load_config
 from lazyrouter.litellm_utils import build_litellm_params
-
 
 if os.getenv("RUN_PROVIDER_INTEGRATION_TESTS") != "1":
     pytest.skip(

@@ -46,7 +46,9 @@ def test_compress_messages_enforces_hard_token_budget():
     messages = [{"role": "system", "content": "sys"}]
     for i in range(18):
         messages.append({"role": "user", "content": f"user-{i} " + ("x " * 150)})
-        messages.append({"role": "assistant", "content": f"assistant-{i} " + ("y " * 150)})
+        messages.append(
+            {"role": "assistant", "content": f"assistant-{i} " + ("y " * 150)}
+        )
 
     compressed, stats = compress_messages(
         messages,
@@ -94,7 +96,12 @@ def test_compress_messages_drops_tool_calls_and_results_together():
                 }
             ],
         },
-        {"role": "tool", "tool_call_id": "call_1", "name": "tool_a", "content": tool_blob},
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "name": "tool_a",
+            "content": tool_blob,
+        },
         {"role": "user", "content": "second"},
         {
             "role": "assistant",
@@ -107,7 +114,12 @@ def test_compress_messages_drops_tool_calls_and_results_together():
                 }
             ],
         },
-        {"role": "tool", "tool_call_id": "call_2", "name": "tool_b", "content": tool_blob},
+        {
+            "role": "tool",
+            "tool_call_id": "call_2",
+            "name": "tool_b",
+            "content": tool_blob,
+        },
         {"role": "user", "content": "recent"},
     ]
 

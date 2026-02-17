@@ -1,12 +1,12 @@
 """Tests for retry handler functionality"""
 
-import pytest
+
+from lazyrouter.config import ModelConfig
 from lazyrouter.retry_handler import (
-    is_retryable_error,
     get_model_elo,
+    is_retryable_error,
     select_fallback_models,
 )
-from lazyrouter.config import ModelConfig
 
 
 class TestIsRetryableError:

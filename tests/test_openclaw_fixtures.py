@@ -24,7 +24,9 @@ def load_fixture(filename: str) -> dict:
         return json.load(f)
 
 
-def send_openai_request(client: httpx.Client, base_url: str, payload: dict, stream: bool = True):
+def send_openai_request(
+    client: httpx.Client, base_url: str, payload: dict, stream: bool = True
+):
     """Send OpenAI-format request and return response or chunks."""
     url = f"{base_url}/v1/chat/completions"
     # Create a copy to avoid mutating the original payload
@@ -53,7 +55,9 @@ def send_openai_request(client: httpx.Client, base_url: str, payload: dict, stre
     return chunks
 
 
-def send_anthropic_request(client: httpx.Client, base_url: str, payload: dict, stream: bool = True):
+def send_anthropic_request(
+    client: httpx.Client, base_url: str, payload: dict, stream: bool = True
+):
     """Send Anthropic-format request and return response or chunks."""
     url = f"{base_url}/v1/messages"
     # Create a copy to avoid mutating the original payload
@@ -85,7 +89,9 @@ def send_anthropic_request(client: httpx.Client, base_url: str, payload: dict, s
     return chunks
 
 
-def send_gemini_request(client: httpx.Client, base_url: str, request_data: dict, stream: bool = True):
+def send_gemini_request(
+    client: httpx.Client, base_url: str, request_data: dict, stream: bool = True
+):
     """Send Gemini-format request and return response or chunks."""
     # Extract path and body from captured request
     path = request_data.get("path", "models/auto:streamGenerateContent")
@@ -125,9 +131,10 @@ def send_gemini_request(client: httpx.Client, base_url: str, request_data: dict,
 # Anthropic Tool-Calling Tests
 # ============================================================================
 
+
 @pytest.mark.skipif(
     os.getenv("LAZYROUTER_E2E_TEST") != "1",
-    reason="E2E test requires running server (set LAZYROUTER_E2E_TEST=1 to enable)"
+    reason="E2E test requires running server (set LAZYROUTER_E2E_TEST=1 to enable)",
 )
 def test_anthropic_tool_call_system_time_step1():
     """Test step 1: Initial tool call request (Anthropic format)."""
@@ -135,7 +142,9 @@ def test_anthropic_tool_call_system_time_step1():
     fixture = load_fixture("anthropic_tool_call_system_time.json")
 
     with httpx.Client() as client:
-        chunks = send_anthropic_request(client, base_url, fixture["step1_request"], stream=True)
+        chunks = send_anthropic_request(
+            client, base_url, fixture["step1_request"], stream=True
+        )
 
     assert chunks is not None, "Should receive streaming response"
     assert len(chunks) > 0, "Should have at least one chunk"
@@ -151,7 +160,7 @@ def test_anthropic_tool_call_system_time_step1():
 
 @pytest.mark.skipif(
     os.getenv("LAZYROUTER_E2E_TEST") != "1",
-    reason="E2E test requires running server (set LAZYROUTER_E2E_TEST=1 to enable)"
+    reason="E2E test requires running server (set LAZYROUTER_E2E_TEST=1 to enable)",
 )
 def test_anthropic_tool_call_system_time_step2():
     """Test step 2: Tool result continuation (Anthropic format)."""
@@ -159,27 +168,30 @@ def test_anthropic_tool_call_system_time_step2():
     fixture = load_fixture("anthropic_tool_call_system_time.json")
 
     with httpx.Client() as client:
-        chunks = send_anthropic_request(client, base_url, fixture["step2_request"], stream=True)
+        chunks = send_anthropic_request(
+            client, base_url, fixture["step2_request"], stream=True
+        )
 
     assert chunks is not None, "Should receive streaming response"
     assert len(chunks) > 0, "Should have at least one chunk"
 
     # Check for text content in response (final answer after tool execution)
     has_text = any(
-        "delta" in chunk
-        and "text" in chunk.get("delta", {})
-        for chunk in chunks
+        "delta" in chunk and "text" in chunk.get("delta", {}) for chunk in chunks
     )
-    assert has_text, "Response should contain text content after processing tool results"
+    assert has_text, (
+        "Response should contain text content after processing tool results"
+    )
 
 
 # ============================================================================
 # OpenAI Tool-Calling Tests
 # ============================================================================
 
+
 @pytest.mark.skipif(
     os.getenv("LAZYROUTER_E2E_TEST") != "1",
-    reason="E2E test requires running server (set LAZYROUTER_E2E_TEST=1 to enable)"
+    reason="E2E test requires running server (set LAZYROUTER_E2E_TEST=1 to enable)",
 )
 def test_openai_tool_call_system_time():
     """Test OpenAI-format tool call request."""
@@ -201,9 +213,10 @@ def test_openai_tool_call_system_time():
 # Gemini Tool-Calling Tests
 # ============================================================================
 
+
 @pytest.mark.skipif(
     os.getenv("LAZYROUTER_E2E_TEST") != "1",
-    reason="E2E test requires running server (set LAZYROUTER_E2E_TEST=1 to enable)"
+    reason="E2E test requires running server (set LAZYROUTER_E2E_TEST=1 to enable)",
 )
 def test_gemini_tool_call_system_time_step1():
     """Test step 1: Initial tool call request (Gemini format)."""
@@ -211,7 +224,9 @@ def test_gemini_tool_call_system_time_step1():
     fixture = load_fixture("gemini_tool_call_system_time.json")
 
     with httpx.Client() as client:
-        chunks = send_gemini_request(client, base_url, fixture["step1_request"], stream=True)
+        chunks = send_gemini_request(
+            client, base_url, fixture["step1_request"], stream=True
+        )
 
     assert chunks is not None, "Should receive streaming response"
     assert len(chunks) > 0, "Should have at least one chunk"
@@ -231,7 +246,7 @@ def test_gemini_tool_call_system_time_step1():
 
 @pytest.mark.skipif(
     os.getenv("LAZYROUTER_E2E_TEST") != "1",
-    reason="E2E test requires running server (set LAZYROUTER_E2E_TEST=1 to enable)"
+    reason="E2E test requires running server (set LAZYROUTER_E2E_TEST=1 to enable)",
 )
 def test_gemini_tool_call_system_time_step2():
     """Test step 2: Tool result continuation (Gemini format)."""
@@ -239,7 +254,9 @@ def test_gemini_tool_call_system_time_step2():
     fixture = load_fixture("gemini_tool_call_system_time.json")
 
     with httpx.Client() as client:
-        chunks = send_gemini_request(client, base_url, fixture["step2_request"], stream=True)
+        chunks = send_gemini_request(
+            client, base_url, fixture["step2_request"], stream=True
+        )
 
     assert chunks is not None, "Should receive streaming response"
     assert len(chunks) > 0, "Should have at least one chunk"
@@ -254,12 +271,15 @@ def test_gemini_tool_call_system_time_step2():
         )
         for chunk in chunks
     )
-    assert has_text, "Response should contain text content after processing tool results"
+    assert has_text, (
+        "Response should contain text content after processing tool results"
+    )
 
 
 # ============================================================================
 # Fixture Validation Tests
 # ============================================================================
+
 
 def test_fixtures_exist():
     """Verify all expected fixture files exist."""
@@ -295,7 +315,9 @@ def test_anthropic_fixture_structure():
     # Step 2
     assert "step2_request" in fixture
     assert "messages" in fixture["step2_request"]
-    assert len(fixture["step2_request"]["messages"]) > len(fixture["step1_request"]["messages"])
+    assert len(fixture["step2_request"]["messages"]) > len(
+        fixture["step1_request"]["messages"]
+    )
     assert "step2_response_chunks" in fixture
     assert len(fixture["step2_response_chunks"]) > 0
 
@@ -336,6 +358,8 @@ def test_gemini_fixture_structure():
     assert "step2_request" in fixture
     assert "body" in fixture["step2_request"]
     assert "contents" in fixture["step2_request"]["body"]
-    assert len(fixture["step2_request"]["body"]["contents"]) > len(fixture["step1_request"]["body"]["contents"])
+    assert len(fixture["step2_request"]["body"]["contents"]) > len(
+        fixture["step1_request"]["body"]["contents"]
+    )
     assert "step2_response_chunks" in fixture
     assert len(fixture["step2_response_chunks"]) > 0

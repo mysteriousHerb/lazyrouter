@@ -28,7 +28,9 @@ from fastapi.responses import StreamingResponse
 
 from lazyrouter.config import Config, load_config
 from lazyrouter.error_logger import sanitize_for_log
-from lazyrouter.model_normalization import normalize_requested_model as normalize_model_id
+from lazyrouter.model_normalization import (
+    normalize_requested_model as normalize_model_id,
+)
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"

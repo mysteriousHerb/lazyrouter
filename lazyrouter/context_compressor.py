@@ -73,9 +73,7 @@ def _estimate_messages_tokens(
     return estimate_messages_tokens(messages, model=model)
 
 
-def truncate_to_tokens(
-    text: str, max_tokens: int, model: Optional[str] = None
-) -> str:
+def truncate_to_tokens(text: str, max_tokens: int, model: Optional[str] = None) -> str:
     """Truncate text to approximately max_tokens using token estimation."""
     if not text:
         return text
@@ -358,5 +356,7 @@ def compress_messages(
             break
 
     compressed_messages = [m for m in compressed if m is not None]
-    stats.compressed_tokens = _estimate_messages_tokens(compressed_messages, model=model)
+    stats.compressed_tokens = _estimate_messages_tokens(
+        compressed_messages, model=model
+    )
     return compressed_messages, stats

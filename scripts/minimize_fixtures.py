@@ -22,13 +22,10 @@ MINIMAL_TOOLS_ANTHROPIC = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "location": {
-                    "type": "string",
-                    "description": "City name or location"
-                }
+                "location": {"type": "string", "description": "City name or location"}
             },
-            "required": ["location"]
-        }
+            "required": ["location"],
+        },
     },
     {
         "name": "exec",
@@ -36,14 +33,11 @@ MINIMAL_TOOLS_ANTHROPIC = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "command": {
-                    "type": "string",
-                    "description": "Shell command to execute"
-                }
+                "command": {"type": "string", "description": "Shell command to execute"}
             },
-            "required": ["command"]
-        }
-    }
+            "required": ["command"],
+        },
+    },
 ]
 
 MINIMAL_TOOLS_OPENAI = [
@@ -57,12 +51,12 @@ MINIMAL_TOOLS_OPENAI = [
                 "properties": {
                     "location": {
                         "type": "string",
-                        "description": "City name or location"
+                        "description": "City name or location",
                     }
                 },
-                "required": ["location"]
-            }
-        }
+                "required": ["location"],
+            },
+        },
     },
     {
         "type": "function",
@@ -74,13 +68,13 @@ MINIMAL_TOOLS_OPENAI = [
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "Shell command to execute"
+                        "description": "Shell command to execute",
                     }
                 },
-                "required": ["command"]
-            }
-        }
-    }
+                "required": ["command"],
+            },
+        },
+    },
 ]
 
 MINIMAL_TOOLS_GEMINI = [
@@ -90,22 +84,15 @@ MINIMAL_TOOLS_GEMINI = [
         "parameters": {
             "type": "object",
             "properties": {
-                "location": {
-                    "type": "string",
-                    "description": "City name or location"
-                }
+                "location": {"type": "string", "description": "City name or location"}
             },
-            "required": ["location"]
-        }
+            "required": ["location"],
+        },
     },
     {
         "name": "session_status",
         "description": "Get current session status and system information",
-        "parameters": {
-            "type": "object",
-            "properties": {},
-            "required": []
-        }
+        "parameters": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "exec",
@@ -113,14 +100,11 @@ MINIMAL_TOOLS_GEMINI = [
         "parameters": {
             "type": "object",
             "properties": {
-                "command": {
-                    "type": "string",
-                    "description": "Shell command to execute"
-                }
+                "command": {"type": "string", "description": "Shell command to execute"}
             },
-            "required": ["command"]
-        }
-    }
+            "required": ["command"],
+        },
+    },
 ]
 
 
@@ -138,7 +122,7 @@ def minimize_anthropic_fixture():
     step1["messages"] = [
         {
             "role": "user",
-            "content": [{"type": "text", "text": "do a tool call, find system time"}]
+            "content": [{"type": "text", "text": "do a tool call, find system time"}],
         }
     ]
 
@@ -151,18 +135,27 @@ def minimize_anthropic_fixture():
     tool_use_msg = None
     tool_result_msg = None
     for msg in step2["messages"]:
-        if msg["role"] == "assistant" and any(c.get("type") == "tool_use" for c in msg.get("content", [])):
+        if msg["role"] == "assistant" and any(
+            c.get("type") == "tool_use" for c in msg.get("content", [])
+        ):
             tool_use_msg = msg
-        if msg["role"] == "user" and any(c.get("type") == "tool_result" for c in msg.get("content", [])):
+        if msg["role"] == "user" and any(
+            c.get("type") == "tool_result" for c in msg.get("content", [])
+        ):
             tool_result_msg = msg
 
     if tool_use_msg is None or tool_result_msg is None:
-        raise ValueError("Could not find expected tool_use or tool_result messages in Anthropic fixture")
+        raise ValueError(
+            "Could not find expected tool_use or tool_result messages in Anthropic fixture"
+        )
 
     step2["messages"] = [
-        {"role": "user", "content": [{"type": "text", "text": "do a tool call, find system time"}]},
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "do a tool call, find system time"}],
+        },
         tool_use_msg,
-        tool_result_msg
+        tool_result_msg,
     ]
 
     # Keep response chunks as-is (they demonstrate the actual tool-calling behavior)
@@ -187,7 +180,7 @@ def minimize_openai_fixture():
     # Replace system message and keep only last user message
     req["messages"] = [
         {"role": "system", "content": MINIMAL_SYSTEM_PROMPT},
-        {"role": "user", "content": "do a tool call to find system time"}
+        {"role": "user", "content": "do a tool call to find system time"},
     ]
 
     # Keep response chunks as-is
@@ -210,14 +203,21 @@ def minimize_gemini_fixture():
     step1_body = fixture["step1_request"]["body"]
     step1_body["tools"] = [{"function_declarations": MINIMAL_TOOLS_GEMINI}]
     # Replace both systemInstruction and system_instruction
-    step1_body["systemInstruction"] = {"parts": [{"text": MINIMAL_SYSTEM_PROMPT}], "role": "user"}
+    step1_body["systemInstruction"] = {
+        "parts": [{"text": MINIMAL_SYSTEM_PROMPT}],
+        "role": "user",
+    }
     if "system_instruction" in step1_body:
         del step1_body["system_instruction"]
     # Keep only the last user message
     step1_body["contents"] = [
         {
             "role": "user",
-            "parts": [{"text": "hi can you do a tool call, like find system time and memory usage"}]
+            "parts": [
+                {
+                    "text": "hi can you do a tool call, like find system time and memory usage"
+                }
+            ],
         }
     ]
 
@@ -225,7 +225,10 @@ def minimize_gemini_fixture():
     step2_body = fixture["step2_request"]["body"]
     step2_body["tools"] = [{"function_declarations": MINIMAL_TOOLS_GEMINI}]
     # Replace both systemInstruction and system_instruction
-    step2_body["systemInstruction"] = {"parts": [{"text": MINIMAL_SYSTEM_PROMPT}], "role": "user"}
+    step2_body["systemInstruction"] = {
+        "parts": [{"text": MINIMAL_SYSTEM_PROMPT}],
+        "role": "user",
+    }
     if "system_instruction" in step2_body:
         del step2_body["system_instruction"]
     # Keep: user message, model with functionCall, user with functionResponse
@@ -233,13 +236,21 @@ def minimize_gemini_fixture():
     function_call_content = None
     function_response_content = None
     for content in step2_body["contents"]:
-        if content["role"] == "model" and any("functionCall" in p for p in content.get("parts", []) if isinstance(p, dict)):
+        if content["role"] == "model" and any(
+            "functionCall" in p for p in content.get("parts", []) if isinstance(p, dict)
+        ):
             function_call_content = content
-        if content["role"] == "user" and any("functionResponse" in p for p in content.get("parts", []) if isinstance(p, dict)):
+        if content["role"] == "user" and any(
+            "functionResponse" in p
+            for p in content.get("parts", [])
+            if isinstance(p, dict)
+        ):
             function_response_content = content
 
     if function_call_content is None or function_response_content is None:
-        raise ValueError("Could not find expected functionCall or functionResponse in Gemini fixture")
+        raise ValueError(
+            "Could not find expected functionCall or functionResponse in Gemini fixture"
+        )
 
     # Redact PII from functionResponse (Telegram chat IDs, usernames, etc.)
     for part in function_response_content.get("parts", []):
@@ -249,17 +260,25 @@ def minimize_gemini_fixture():
                 # Replace Telegram chat IDs with placeholder
                 output = response_data["output"]
                 import re
-                output = re.sub(r'telegram:\d+', 'telegram:0000000000', output)
-                output = re.sub(r'direct:\d+', 'direct:0000000000', output)
+
+                output = re.sub(r"telegram:\d+", "telegram:0000000000", output)
+                output = re.sub(r"direct:\d+", "direct:0000000000", output)
                 # Replace usernames in paths
-                output = re.sub(r'/home/\w+/', '/home/testuser/', output)
-                output = re.sub(r'C:\\Users\\\w+\\', r'C:\\Users\\testuser\\', output)
+                output = re.sub(r"/home/\w+/", "/home/testuser/", output)
+                output = re.sub(r"C:\\Users\\\w+\\", r"C:\\Users\\testuser\\", output)
                 response_data["output"] = output
 
     step2_body["contents"] = [
-        {"role": "user", "parts": [{"text": "hi can you do a tool call, like find system time and memory usage"}]},
+        {
+            "role": "user",
+            "parts": [
+                {
+                    "text": "hi can you do a tool call, like find system time and memory usage"
+                }
+            ],
+        },
         function_call_content,
-        function_response_content
+        function_response_content,
     ]
 
     # Keep response chunks as-is

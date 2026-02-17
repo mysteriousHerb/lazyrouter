@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import time
+
 import httpx
 import pytest
 
@@ -61,13 +62,19 @@ TOOLS = [
 
 def pp(label: str, obj):
     """Pretty-print a labeled JSON object."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  {label}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(json.dumps(obj, indent=2, ensure_ascii=False))
 
 
-def send_request(client: httpx.Client, base_url: str, payload: dict, stream: bool, verbose: bool = True):
+def send_request(
+    client: httpx.Client,
+    base_url: str,
+    payload: dict,
+    stream: bool,
+    verbose: bool = True,
+):
     """Send a chat completion request and return parsed response."""
     url = f"{base_url}/v1/chat/completions"
     payload["stream"] = stream
@@ -135,15 +142,23 @@ def send_request(client: httpx.Client, base_url: str, payload: dict, stream: boo
                 delta = choice.get("delta", {})
                 # Check for tool result passthrough (role=tool in delta)
                 if delta.get("role") == "tool":
-                    tool_results_passthrough.append({
-                        "tool_call_id": delta.get("tool_call_id"),
-                        "name": delta.get("name"),
-                        "content": delta.get("content"),
-                    })
+                    tool_results_passthrough.append(
+                        {
+                            "tool_call_id": delta.get("tool_call_id"),
+                            "name": delta.get("name"),
+                            "content": delta.get("content"),
+                        }
+                    )
                     if verbose:
-                        print(f"  [TOOL RESULT PASSTHROUGH] id={delta.get('tool_call_id')} name={delta.get('name')}")
+                        print(
+                            f"  [TOOL RESULT PASSTHROUGH] id={delta.get('tool_call_id')} name={delta.get('name')}"
+                        )
                 # Accumulate text
-                if "content" in delta and delta["content"] and delta.get("role") != "tool":
+                if (
+                    "content" in delta
+                    and delta["content"]
+                    and delta.get("role") != "tool"
+                ):
                     text_content += delta["content"]
                 # Accumulate tool calls
                 for tc in delta.get("tool_calls", []) or []:
@@ -166,11 +181,13 @@ def send_request(client: httpx.Client, base_url: str, payload: dict, stream: boo
     tool_calls_list = []
     for idx in sorted(tool_calls_acc.keys()):
         tc = tool_calls_acc[idx]
-        tool_calls_list.append({
-            "id": tc["id"],
-            "type": "function",
-            "function": {"name": tc["name"], "arguments": tc["arguments"]},
-        })
+        tool_calls_list.append(
+            {
+                "id": tc["id"],
+                "type": "function",
+                "function": {"name": tc["name"], "arguments": tc["arguments"]},
+            }
+        )
 
     reconstructed = {
         "stream_chunks": len(collected_chunks),
@@ -200,7 +217,10 @@ def run_tool_call_flow(base_url: str, model: str, stream: bool, verbose: bool = 
     step1_payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": "You are a helpful assistant. Use tools when needed."},
+            {
+                "role": "system",
+                "content": "You are a helpful assistant. Use tools when needed.",
+            },
             {"role": "user", "content": "What's the weather in Tokyo?"},
         ],
         "tools": TOOLS,
@@ -211,7 +231,12 @@ def run_tool_call_flow(base_url: str, model: str, stream: bool, verbose: bool = 
     if result1 is None:
         if verbose:
             print("\nSTEP 1 FAILED - cannot continue")
-        return {"success": False, "step1_result": None, "step2_result": None, "tool_calls": None}
+        return {
+            "success": False,
+            "step1_result": None,
+            "step2_result": None,
+            "tool_calls": None,
+        }
 
     # Extract tool calls from response
     if stream:
@@ -224,12 +249,19 @@ def run_tool_call_flow(base_url: str, model: str, stream: bool, verbose: bool = 
         if verbose:
             print("\nNo tool calls returned - model responded with text instead.")
             print("This might be expected if the model chose not to use tools.")
-        return {"success": False, "step1_result": result1, "step2_result": None, "tool_calls": None}
+        return {
+            "success": False,
+            "step1_result": result1,
+            "step2_result": None,
+            "tool_calls": None,
+        }
 
     if verbose:
         print(f"\nExtracted {len(tool_calls)} tool call(s):")
         for tc in tool_calls:
-            print(f"  - id={tc.get('id')} name={tc.get('function', {}).get('name')} args={tc.get('function', {}).get('arguments')}")
+            print(
+                f"  - id={tc.get('id')} name={tc.get('function', {}).get('name')} args={tc.get('function', {}).get('arguments')}"
+            )
 
     # Step 2: Send tool results back
     if verbose:
@@ -249,18 +281,24 @@ def run_tool_call_flow(base_url: str, model: str, stream: bool, verbose: bool = 
         fn_name = tc.get("function", {}).get("name", "")
         tc_id = tc.get("id", "")
         if fn_name == "get_weather":
-            result_content = json.dumps({"temperature": 22, "condition": "sunny", "city": "Tokyo"})
+            result_content = json.dumps(
+                {"temperature": 22, "condition": "sunny", "city": "Tokyo"}
+            )
         elif fn_name == "search_web":
-            result_content = json.dumps({"results": [{"title": "Tokyo weather", "snippet": "Sunny, 22C"}]})
+            result_content = json.dumps(
+                {"results": [{"title": "Tokyo weather", "snippet": "Sunny, 22C"}]}
+            )
         else:
             result_content = json.dumps({"result": "ok"})
 
-        continuation_messages.append({
-            "role": "tool",
-            "tool_call_id": tc_id,
-            "name": fn_name,
-            "content": result_content,
-        })
+        continuation_messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tc_id,
+                "name": fn_name,
+                "content": result_content,
+            }
+        )
 
     step2_payload = {
         "model": model,
@@ -273,7 +311,12 @@ def run_tool_call_flow(base_url: str, model: str, stream: bool, verbose: bool = 
     if result2 is None:
         if verbose:
             print("\nSTEP 2 FAILED")
-        return {"success": False, "step1_result": result1, "step2_result": None, "tool_calls": tool_calls}
+        return {
+            "success": False,
+            "step1_result": result1,
+            "step2_result": None,
+            "tool_calls": tool_calls,
+        }
 
     if verbose:
         print("\n" + "#" * 60)
@@ -281,16 +324,22 @@ def run_tool_call_flow(base_url: str, model: str, stream: bool, verbose: bool = 
         print("#" * 60)
         print("Tool-calling round-trip finished successfully.")
 
-    return {"success": True, "step1_result": result1, "step2_result": result2, "tool_calls": tool_calls}
+    return {
+        "success": True,
+        "step1_result": result1,
+        "step2_result": result2,
+        "tool_calls": tool_calls,
+    }
 
 
 # ============================================================================
 # Pytest tests
 # ============================================================================
 
+
 @pytest.mark.skipif(
     os.getenv("LAZYROUTER_E2E_TEST") != "1",
-    reason="E2E test requires running server (set LAZYROUTER_E2E_TEST=1 to enable)"
+    reason="E2E test requires running server (set LAZYROUTER_E2E_TEST=1 to enable)",
 )
 @pytest.mark.parametrize("stream", [True, False])
 def test_tool_calling_flow_streaming_and_nonstreaming(stream):
@@ -310,21 +359,36 @@ def test_tool_calling_flow_streaming_and_nonstreaming(stream):
 # Standalone CLI
 # ============================================================================
 
+
 def main():
-    parser = argparse.ArgumentParser(description="Test tool-calling flow through LazyRouter")
-    parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help=f"Server URL (default: {DEFAULT_BASE_URL})")
-    parser.add_argument("--model", default=DEFAULT_MODEL, help=f"Model to use (default: {DEFAULT_MODEL})")
+    parser = argparse.ArgumentParser(
+        description="Test tool-calling flow through LazyRouter"
+    )
+    parser.add_argument(
+        "--base-url",
+        default=DEFAULT_BASE_URL,
+        help=f"Server URL (default: {DEFAULT_BASE_URL})",
+    )
+    parser.add_argument(
+        "--model",
+        default=DEFAULT_MODEL,
+        help=f"Model to use (default: {DEFAULT_MODEL})",
+    )
     parser.add_argument("--no-stream", action="store_true", help="Disable streaming")
     args = parser.parse_args()
 
     stream = not args.no_stream
-    print(f"Testing tool-calling flow: {args.base_url} model={args.model} stream={stream}")
+    print(
+        f"Testing tool-calling flow: {args.base_url} model={args.model} stream={stream}"
+    )
 
     # Quick health check
     try:
         resp = httpx.get(f"{args.base_url}/health", timeout=5)
         health = resp.json()
-        print(f"Server healthy: router={health.get('router_model')} models={health.get('available_models')}")
+        print(
+            f"Server healthy: router={health.get('router_model')} models={health.get('available_models')}"
+        )
     except Exception as e:
         print(f"Cannot reach server at {args.base_url}: {e}")
         sys.exit(1)

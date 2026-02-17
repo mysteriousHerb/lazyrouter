@@ -84,4 +84,4 @@ def select_fallback_models(
         candidates.append((not is_healthy, elo_diff, name))
 
     candidates.sort()
-    return [name for _, _, name in candidates[:MAX_FALLBACK_MODELS - 1]]
+    return [name for _, _, name in candidates[: MAX_FALLBACK_MODELS - 1]]

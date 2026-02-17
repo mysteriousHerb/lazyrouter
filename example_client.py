@@ -6,7 +6,8 @@ from openai import OpenAI
 def main():
     # Create client pointing to LazyRouter5
     client = OpenAI(
-        base_url="http://localhost:1234/v1", api_key="dummy"  # Not used, but required by SDK
+        base_url="http://localhost:1234/v1",
+        api_key="dummy",  # Not used, but required by SDK
     )
 
     print("=" * 60)
@@ -67,7 +68,9 @@ def main():
     print("   Query: 'Count from 1 to 5'")
     print("   Response: ", end="", flush=True)
     stream = client.chat.completions.create(
-        model="auto", messages=[{"role": "user", "content": "Count from 1 to 5"}], stream=True
+        model="auto",
+        messages=[{"role": "user", "content": "Count from 1 to 5"}],
+        stream=True,
     )
     for chunk in stream:
         if chunk.choices[0].delta.content:

@@ -30,7 +30,6 @@ def test_gemini_tool_sanitizer_keeps_openai_function_tools_by_default():
     ]
 
 
-
 def test_gemini_tool_sanitizer_converts_bare_function_tools_to_openai_style():
     tools = [
         {
@@ -90,7 +89,7 @@ def test_gemini_tool_sanitizer_converts_function_declarations():
                 "description": "Write a file",
                 "parameters": {"type": "object", "properties": {}},
             },
-        }
+        },
     ]
 
 

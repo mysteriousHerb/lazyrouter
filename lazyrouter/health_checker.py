@@ -312,9 +312,7 @@ class HealthChecker:
 
         # If ALL models are unhealthy, log error and keep none available (strict mode)
         if not new_healthy:
-            logger.error(
-                "Health check: ALL models unhealthy; keeping none available"
-            )
+            logger.error("Health check: ALL models unhealthy; keeping none available")
 
         if new_healthy != self.healthy_models:
             added = new_healthy - self.healthy_models

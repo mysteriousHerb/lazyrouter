@@ -3,8 +3,8 @@
 
 import json
 import sys
-from pathlib import Path
 from collections import Counter
+from pathlib import Path
 
 
 def view_routing_log(log_path: str):
@@ -24,10 +24,10 @@ def view_routing_log(log_path: str):
         print("No routing decisions found in log")
         return
 
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print(f"ROUTING LOG: {log_path}")
     print(f"Total decisions: {len(entries)}")
-    print(f"{'='*80}\n")
+    print(f"{'=' * 80}\n")
 
     # Summary statistics
     model_counts = Counter(e["selected_model"] for e in entries)
@@ -37,28 +37,30 @@ def view_routing_log(log_path: str):
     print("SUMMARY:")
     print(f"  Average routing latency: {avg_latency:.1f}ms")
     print(f"  Average context length: {avg_context_len:.0f} chars")
-    print(f"\n  Model selection distribution:")
+    print("\n  Model selection distribution:")
     for model, count in model_counts.most_common():
         pct = (count / len(entries)) * 100
         print(f"    {model}: {count} ({pct:.1f}%)")
 
-    print(f"\n{'='*80}\n")
+    print(f"\n{'=' * 80}\n")
 
     # Individual decisions
     for i, entry in enumerate(entries, 1):
         print(f"Decision #{i} - {entry['timestamp']}")
         print(f"  Selected: {entry['selected_model']}")
         print(f"  Latency: {entry['latency_ms']:.1f}ms")
-        print(f"  Context: {entry['num_context_messages']} messages, {entry['context_length']} chars")
+        print(
+            f"  Context: {entry['num_context_messages']} messages, {entry['context_length']} chars"
+        )
 
         # Show context (truncated)
-        context = entry['context']
+        context = entry["context"]
         if len(context) > 200:
             context = context[:200] + "..."
         print(f"  Context preview: {context.replace(chr(10), ' | ')}")
 
         # Show router response
-        if entry['router_response']:
+        if entry["router_response"]:
             print(f"  Router response: {entry['router_response']}")
 
         print()

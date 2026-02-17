@@ -79,7 +79,9 @@ def test_router_chat_completion_passes_openai_params(monkeypatch):
             {
                 "id": "resp-1",
                 "model": kwargs["model"],
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}}],
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "ok"}}
+                ],
             }
         )
 
@@ -139,7 +141,9 @@ def test_router_chat_completion_retries_without_stream_options_on_422(monkeypatc
     assert chunks[-1] == "data: [DONE]\n\n"
 
 
-def test_router_chat_completion_retries_without_max_tokens_after_stream_options_422(monkeypatch):
+def test_router_chat_completion_retries_without_max_tokens_after_stream_options_422(
+    monkeypatch,
+):
     calls = []
 
     async def _fake_acompletion(**kwargs):

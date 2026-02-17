@@ -18,8 +18,12 @@ def _config() -> Config:
         router=RouterConfig(provider="p1", model="m1"),
         providers={"p1": ProviderConfig(api_key="test-key", api_style="openai")},
         llms={
-            "m1": ModelConfig(provider="p1", model="model-one", description="model one"),
-            "m2": ModelConfig(provider="p1", model="model-two", description="model two"),
+            "m1": ModelConfig(
+                provider="p1", model="model-one", description="model one"
+            ),
+            "m2": ModelConfig(
+                provider="p1", model="model-two", description="model two"
+            ),
         },
         health_check=HealthCheckConfig(
             interval=300,

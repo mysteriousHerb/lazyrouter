@@ -24,10 +24,10 @@ async def check_imports():
     """Check critical imports."""
     print("\nTesting module imports...")
     try:
-        from lazyrouter.server import create_app
-        from lazyrouter.router import LLMRouter
         from lazyrouter.litellm_utils import build_litellm_params
         from lazyrouter.models import ChatCompletionRequest, ChatCompletionResponse
+        from lazyrouter.router import LLMRouter
+        from lazyrouter.server import create_app
 
         _ = (
             create_app,

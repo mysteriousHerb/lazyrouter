@@ -22,18 +22,24 @@ from .message_utils import (
     content_to_text,
     tool_call_name_by_id,
 )
+from .model_normalization import normalize_requested_model
 from .models import (
+    ChatCompletionRequest,
     HealthCheckResponse,
     HealthCheckResult,
-    ChatCompletionRequest,
     HealthResponse,
     HealthStatusResponse,
     ModelInfo,
     ModelListResponse,
 )
+from .retry_handler import (
+    INITIAL_RETRY_DELAY,
+    RETRY_MULTIPLIER,
+    is_retryable_error,
+    select_fallback_models,
+)
 from .router import LLMRouter
 from .sanitizers import (
-    GEMINI_THOUGHT_ID_DELIMITER,
     extract_retry_tools_for_gemini,
     sanitize_messages_for_gemini,
     sanitize_tool_schema_for_anthropic,
@@ -49,14 +55,6 @@ from .tool_cache import (
     tool_cache_set,
 )
 from .usage_logger import estimate_tokens
-from .retry_handler import (
-    is_retryable_error,
-    select_fallback_models,
-    INITIAL_RETRY_DELAY,
-    RETRY_MULTIPLIER,
-    MAX_FALLBACK_MODELS,
-)
-from .model_normalization import normalize_requested_model
 
 # Configure logging
 logging.basicConfig(
@@ -73,7 +71,9 @@ router: LLMRouter = None
 health_checker: HealthChecker = None
 
 
-def _normalize_requested_model(model_name: str, available_models: Dict[str, Any]) -> str:
+def _normalize_requested_model(
+    model_name: str, available_models: Dict[str, Any]
+) -> str:
     """Normalize provider-prefixed model ids (e.g. lazyrouter/auto)."""
     return normalize_requested_model(model_name, available_models)
 
@@ -544,7 +544,9 @@ def create_app(
                 return prep_messages, prep_extra, api_style
 
             # Initialize provider-specific state for the selected model
-            provider_messages, extra_kwargs, provider_api_style = prepare_for_model(selected_model)
+            provider_messages, extra_kwargs, provider_api_style = prepare_for_model(
+                selected_model
+            )
 
             # Helper for backoff retry loop (extracted to reduce nesting)
             async def _backoff_retry_loop(
@@ -595,7 +597,9 @@ def create_app(
                         if not mc:
                             continue
 
-                        prep_messages, prep_extra, api_style = prepare_for_model(try_model)
+                        prep_messages, prep_extra, api_style = prepare_for_model(
+                            try_model
+                        )
                         if prep_messages is None:
                             continue
 
@@ -613,7 +617,14 @@ def create_app(
                                 effective_max_tokens=effective_max_tokens,
                             )
                             logger.info("[backoff] succeeded with %s", try_model)
-                            return (resp, try_model, mc, api_style, prep_messages, prep_extra)
+                            return (
+                                resp,
+                                try_model,
+                                mc,
+                                api_style,
+                                prep_messages,
+                                prep_extra,
+                            )
 
                         except Exception as e:
                             if not is_retryable_error(e):
@@ -711,7 +722,9 @@ def create_app(
                         effective_max_tokens=effective_max_tokens,
                     )
                     if result is not None:
-                        resp, try_model, mc, api_style, prep_messages, prep_extra = result
+                        resp, try_model, mc, api_style, prep_messages, prep_extra = (
+                            result
+                        )
                         selected_model = try_model
                         model_config = mc
                         provider_api_style = api_style
@@ -1004,7 +1017,9 @@ def create_app(
                 )
             else:
                 response_message = _get_first_response_message(response)
-                tool_calls = response_message.get("tool_calls") if response_message else []
+                tool_calls = (
+                    response_message.get("tool_calls") if response_message else []
+                )
                 if not isinstance(tool_calls, list):
                     tool_calls = []
                 used_tool_names = []
