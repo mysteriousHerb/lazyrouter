@@ -218,11 +218,21 @@ class LLMRouter:
 
         # Use custom prompt from config if provided, otherwise use default
         prompt_template = self.config.router.prompt or ROUTING_PROMPT_TEMPLATE
-        routing_prompt = prompt_template.format(
-            model_descriptions=model_descriptions,
-            context=conversation_context,
-            current_request=current_request,
-        )
+        try:
+            routing_prompt = prompt_template.format(
+                model_descriptions=model_descriptions,
+                context=conversation_context,
+                current_request=current_request,
+            )
+        except (KeyError, ValueError, IndexError) as fmt_err:
+            logger.warning(
+                f"Custom prompt format failed ({fmt_err}); falling back to default template"
+            )
+            routing_prompt = ROUTING_PROMPT_TEMPLATE.format(
+                model_descriptions=model_descriptions,
+                context=conversation_context,
+                current_request=current_request,
+            )
 
         # Combined context for logging
         full_context = f"{conversation_context}\n\nCURRENT: {current_request}"
