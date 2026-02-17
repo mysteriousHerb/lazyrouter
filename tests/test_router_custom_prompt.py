@@ -1,6 +1,7 @@
 """Test custom routing prompt override functionality"""
 
 import asyncio
+import pytest
 from unittest.mock import AsyncMock, patch
 
 from lazyrouter.config import (
@@ -70,6 +71,25 @@ Choose wisely."""
     assert router.config.router.prompt == custom_prompt
 
 
+def test_custom_prompt_validation_rejects_missing_placeholders():
+    """Config validation should reject custom prompts missing required placeholders"""
+    # Missing {current_request} placeholder
+    invalid_prompt = """Invalid prompt:
+Models: {model_descriptions}
+Context: {context}"""
+
+    with pytest.raises(ValueError) as exc_info:
+        RouterConfig(
+            provider="test",
+            model="test-model",
+            prompt=invalid_prompt,
+        )
+
+    error_msg = str(exc_info.value)
+    assert "current_request" in error_msg
+    assert "placeholder" in error_msg.lower()
+
+
 def test_router_uses_custom_prompt_during_routing():
     """Verify that custom prompt is actually used when calling route()"""
     custom_prompt = """CUSTOM PROMPT TEST:
@@ -126,9 +146,12 @@ Request: {current_request}"""
 
 def test_router_falls_back_on_invalid_custom_prompt():
     """Verify router falls back to default prompt when custom prompt has format errors"""
-    # Custom prompt with invalid placeholder (missing closing brace)
+    # Custom prompt with all required placeholders but also an invalid one (unclosed brace)
+    # This will pass validation but fail during formatting
     invalid_prompt = """Invalid prompt with {unclosed_brace
-Models: {model_descriptions}"""
+Models: {model_descriptions}
+Context: {context}
+Request: {current_request}"""
 
     cfg = Config(
         serve=ServeConfig(),
