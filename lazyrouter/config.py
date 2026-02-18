@@ -130,8 +130,8 @@ class HealthCheckConfig(BaseModel):
             raise ValueError("health_check.interval must be > 0")
         if self.max_latency_ms <= 0:
             raise ValueError("health_check.max_latency_ms must be > 0")
-        if self.idle_after_seconds < 0:
-            raise ValueError("health_check.idle_after_seconds must be >= 0")
+        if self.idle_after_seconds <= 0:
+            raise ValueError("health_check.idle_after_seconds must be > 0")
         return self
 
 
