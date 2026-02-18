@@ -21,7 +21,6 @@ from .models import (
 )
 from .pipeline import (
     RequestContext,
-    _prepare_for_model,
     call_with_fallback,
     compress_context,
     normalize_messages,
@@ -29,12 +28,6 @@ from .pipeline import (
     select_model,
 )
 from .router import LLMRouter
-from .sanitizers import (
-    sanitize_messages_for_gemini,
-    sanitize_tool_schema_for_anthropic,
-    sanitize_tool_schema_for_gemini,
-)
-from .session_utils import build_compression_config_for_request
 from .tool_cache import tool_cache_set
 
 # Configure logging
@@ -50,13 +43,6 @@ logger = logging.getLogger(__name__)
 config: Config = None
 router: LLMRouter = None
 health_checker: HealthChecker = None
-
-
-def _normalize_requested_model(
-    model_name: str, available_models: Dict[str, Any]
-) -> str:
-    """Normalize provider-prefixed model ids (e.g. lazyrouter/auto)."""
-    return normalize_requested_model(model_name, available_models)
 
 
 def _configure_logging(debug: bool) -> None:

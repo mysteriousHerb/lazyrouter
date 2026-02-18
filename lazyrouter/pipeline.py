@@ -475,7 +475,7 @@ async def call_with_fallback(ctx: RequestContext, router_instance: Any, health_c
                 logger.warning("[fallback] model %s failed with retryable error: %s", try_model, str(e)[:200])
                 continue
             else:
-                logger.error("[fallback] model %s failed with non-retryable error: %s", try_model, str(e)[:200])
+                logger.exception("[fallback] model %s failed with non-retryable error: %s", try_model, str(e)[:200])
                 raise
 
     # All models failed — backoff until next health check

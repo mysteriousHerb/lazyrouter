@@ -1,4 +1,4 @@
-from lazyrouter.server import (
+from lazyrouter.sanitizers import (
     sanitize_messages_for_gemini,
     sanitize_tool_schema_for_anthropic,
     sanitize_tool_schema_for_gemini,
