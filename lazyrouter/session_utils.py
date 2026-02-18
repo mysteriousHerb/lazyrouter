@@ -49,7 +49,7 @@ def extract_session_key(
     # This allows tool-call pinning to work even when no explicit session id is sent.
     for msg in messages:
         if msg.get("role") == "user":
-            text = content_to_text(msg.get("content", ""))
+            text = content_to_text(msg.get("content", "")).strip()
             if text:
                 digest = hashlib.sha256(text.encode()).hexdigest()[:16]
                 return f"auto:{digest}"
