@@ -100,10 +100,13 @@ def _with_model_prefix_if_enabled(
     return f"{prefix}{content}"
 
 
-_MODEL_PREFIX_RE = re.compile(r"^\[[\w\-\.\:]+\] ")
+def _build_prefix_re(known_models: set) -> re.Pattern:
+    """Build a regex that matches only known model name prefixes like [model-name] ."""
+    escaped = sorted((re.escape(m) for m in known_models), key=len, reverse=True)
+    return re.compile(r"^\[(?:" + "|".join(escaped) + r")\] ")
 
 
-def _strip_model_prefixes_from_history(messages: list) -> list:
+def _strip_model_prefixes_from_history(messages: list, known_models: set) -> list:
     """Remove [model-name] prefixes from assistant messages before sending upstream.
 
     When show_model_prefix is enabled the server injects a visible prefix into
@@ -112,14 +115,20 @@ def _strip_model_prefixes_from_history(messages: list) -> list:
     upstream LLM sees the pattern it will mimic it, and the server then adds
     another prefix on top, producing stacked prefixes.  Stripping them here
     keeps the upstream context clean.
+
+    Only strips prefixes matching known configured model names to avoid
+    accidentally removing legitimate content.
     """
+    if not known_models:
+        return messages
+    prefix_re = _build_prefix_re(known_models)
     result = []
     for msg in messages:
         if msg.get("role") == "assistant":
             content = msg.get("content")
-            if isinstance(content, str) and _MODEL_PREFIX_RE.match(content):
+            if isinstance(content, str) and prefix_re.match(content):
                 msg = dict(msg)
-                msg["content"] = _MODEL_PREFIX_RE.sub("", content)
+                msg["content"] = prefix_re.sub("", content)
         result.append(msg)
     return result
 
@@ -276,7 +285,7 @@ def create_app(
 
             # Strip any [model] prefixes injected by show_model_prefix from history
             # so the upstream LLM doesn't mimic the pattern and produce stacked prefixes.
-            messages = _strip_model_prefixes_from_history(messages)
+            messages = _strip_model_prefixes_from_history(messages, set(config.llms.keys()))
 
             # Build minimal request context needed for cache/session behavior.
             last_user_text_raw = ""
