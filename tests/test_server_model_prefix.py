@@ -94,3 +94,9 @@ def test_build_prefix_re_matches_known_model():
     assert pattern.match("[claude-opus-4-6] hello")
     assert not pattern.match("[unknown-model] hello")
 
+
+def test_strip_removes_all_stacked_prefixes():
+    messages = [{"role": "assistant", "content": "[gemini-3-flash] [claude-opus-4-6_zzapi] hello"}]
+    result = _strip_model_prefixes_from_history(messages, {"gemini-3-flash", "claude-opus-4-6_zzapi"})
+    assert result[0]["content"] == "hello"
+

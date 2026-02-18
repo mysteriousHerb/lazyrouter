@@ -128,7 +128,10 @@ def _strip_model_prefixes_from_history(messages: list, known_models: set) -> lis
             content = msg.get("content")
             if isinstance(content, str) and prefix_re.match(content):
                 msg = dict(msg)
-                msg["content"] = prefix_re.sub("", content)
+                # Strip all stacked prefixes, not just the outermost one.
+                while prefix_re.match(content):
+                    content = prefix_re.sub("", content)
+                msg["content"] = content
         result.append(msg)
     return result
 
