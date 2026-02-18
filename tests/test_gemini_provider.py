@@ -1,5 +1,5 @@
 from lazyrouter.litellm_utils import build_litellm_params
-from lazyrouter.server import sanitize_messages_for_gemini
+from lazyrouter.sanitizers import sanitize_messages_for_gemini
 
 
 def test_build_litellm_params_gemini_custom_base_url_adds_v1beta_and_auth():

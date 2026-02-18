@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+import lazyrouter.pipeline as pipeline_mod
 import lazyrouter.server as server_mod
 from lazyrouter.config import (
     Config,
@@ -152,7 +153,7 @@ def test_chat_completion_calls_idle_preflight_hook(monkeypatch):
         _fake_note_request,
     )
     monkeypatch.setattr(
-        server_mod,
+        pipeline_mod,
         "call_router_with_gemini_fallback",
         _fake_call_router_with_gemini_fallback,
     )

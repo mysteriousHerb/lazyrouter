@@ -11,7 +11,7 @@ import litellm
 from .config import Config, ModelConfig
 from .error_logger import log_provider_error
 from .litellm_utils import build_litellm_params
-from .message_utils import content_to_text
+from .message_utils import content_to_text, tool_call_name_by_id
 from .routing_logger import RoutingLogger
 
 # Configure LiteLLM globally
@@ -119,6 +119,33 @@ class LLMRouter:
             descriptions.append("".join(parts))
         return "\n".join(descriptions)
 
+    @staticmethod
+    def _summarize_tool_calls_for_router(
+        messages: List[Dict[str, Any]],
+    ) -> Dict[str, str]:
+        """Build tool_call_id -> one-liner summary for the router context.
+
+        Returns a mapping so tool-result messages can be replaced with a
+        compact line like: "tool(read): src/config.ts (2419 chars)"
+        """
+        name_map = tool_call_name_by_id(messages)
+        summaries: Dict[str, str] = {}
+
+        for msg in messages:
+            if msg.get("role") != "tool":
+                continue
+            tcid = msg.get("tool_call_id", "")
+            if not tcid:
+                continue
+            fn = name_map.get(tcid, msg.get("name", "tool"))
+            raw = content_to_text(msg.get("content", ""))
+            chars = len(raw)
+            lines = raw.count("\n") + 1 if raw else 0
+            # Compact one-liner: tool name + size hint
+            summaries[tcid] = f"[{fn}: {lines}L/{chars}ch]"
+
+        return summaries
+
     def _extract_user_query(self, messages: List[Dict[str, Any]]) -> str:
         """Extract the user's query from message history
 
@@ -175,27 +202,53 @@ class LLMRouter:
         # Build conversation context (if configured)
         context_messages_config = self.config.router.context_messages
         if context_messages_config and context_messages_config > 1:
-            # Get conversation history (excluding the last user message since we show it separately)
-            conversation = [
-                msg for msg in messages if msg.get("role") in ("user", "assistant")
-            ]
-            # Take N-1 messages (exclude the last user message)
-            context_history = conversation[:-1] if len(conversation) > 1 else []
-            recent_context = (
-                context_history[-(context_messages_config - 1) :]
-                if context_messages_config > 1
-                else context_history
-            )
+            # Build tool-call summaries so the router sees tool activity
+            tool_summaries = self._summarize_tool_calls_for_router(messages)
 
-            # Format context
+            # Get conversation history including tool messages
+            conversation = [
+                msg
+                for msg in messages
+                if msg.get("role") in ("user", "assistant", "tool")
+            ]
+            # Exclude the last user message (shown separately as current_request)
+            last_user_idx = None
+            for i in range(len(conversation) - 1, -1, -1):
+                if conversation[i].get("role") == "user":
+                    last_user_idx = i
+                    break
+            context_history = (
+                conversation[:last_user_idx]
+                if last_user_idx is not None
+                else conversation
+            )
+            recent_context = context_history[-(context_messages_config - 1) :]
+
+            # Format context with tool summaries
             context_lines = []
             for msg in recent_context:
                 role = msg.get("role", "unknown")
+
+                # Tool result → compact one-liner
+                if role == "tool":
+                    tcid = msg.get("tool_call_id", "")
+                    if tcid in tool_summaries:
+                        context_lines.append(f"tool: {tool_summaries[tcid]}")
+                    continue
+
+                # Assistant with tool_calls → list tool names only
+                if role == "assistant" and msg.get("tool_calls"):
+                    names = [
+                        (tc.get("function") or {}).get("name", "?")
+                        for tc in msg["tool_calls"]
+                    ]
+                    context_lines.append(f"assistant: called {', '.join(names)}")
+                    continue
+
+                # Normal user/assistant text
                 content = content_to_text(msg.get("content", ""))
-                if content and "tool_calls" not in msg:
-                    context_lines.append(
-                        f"{role}: {content[:300]}"
-                    )  # Shorter truncation for context
+                if content:
+                    context_lines.append(f"{role}: {content[:300]}")
 
             conversation_context = (
                 "\n".join(context_lines) if context_lines else "(no prior context)"
