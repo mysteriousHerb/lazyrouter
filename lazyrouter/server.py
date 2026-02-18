@@ -803,7 +803,7 @@ def create_app(
                     retried_gemini_tool_schema = False
                     retried_gemini_tool_schema_camel = False
                     retried_gemini_without_tools = False
-                    model_prefix_pending = show_model_prefix
+                    model_prefix_pending = show_model_prefix and not is_tool_continuation_turn
                     current_response = response
 
                     def _router_meta() -> Dict[str, Any]:
@@ -1086,7 +1086,7 @@ def create_app(
                 if used_tool_names:
                     logger.info(f"[tool-calls] {used_tool_names}")
 
-                if show_model_prefix and response_message:
+                if show_model_prefix and not is_tool_continuation_turn and response_message:
                     response_message["content"] = _with_model_prefix_if_enabled(
                         response_message.get("content"),
                         selected_model,
