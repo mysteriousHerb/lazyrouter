@@ -285,7 +285,9 @@ def create_app(
 
             # Strip any [model] prefixes injected by show_model_prefix from history
             # so the upstream LLM doesn't mimic the pattern and produce stacked prefixes.
-            messages = _strip_model_prefixes_from_history(messages, set(config.llms.keys()))
+            show_model_prefix = bool(getattr(config.serve, "show_model_prefix", False))
+            if show_model_prefix:
+                messages = _strip_model_prefixes_from_history(messages, set(config.llms.keys()))
 
             # Build minimal request context needed for cache/session behavior.
             last_user_text_raw = ""
@@ -783,7 +785,6 @@ def create_app(
                 )
 
             response = await call_model_with_fallback()
-            show_model_prefix = bool(getattr(config.serve, "show_model_prefix", False))
             response_model_prefix = _model_prefix(selected_model)
 
             # Handle streaming vs non-streaming
