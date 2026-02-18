@@ -356,7 +356,11 @@ class HealthChecker:
                     reason = (
                         r.error
                         if r.status == "error"
-                        else f"total_ms={r.total_ms} > {self.hc_config.max_latency_ms}"
+                        else (
+                            "total_ms unavailable"
+                            if r.total_ms is None
+                            else f"total_ms={r.total_ms} > {self.hc_config.max_latency_ms}"
+                        )
                     )
                     logger.warning(f"Health check: {name} unhealthy — {reason}")
             else:
@@ -446,3 +450,4 @@ class HealthChecker:
         if self._task:
             self._task.cancel()
             self._task = None
+

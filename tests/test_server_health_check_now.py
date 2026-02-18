@@ -30,8 +30,8 @@ def _config() -> Config:
 
 
 def test_health_check_now_refreshes_and_matches_health_status(monkeypatch):
-    monkeypatch.setattr(server_mod.HealthChecker, "start", lambda self: None)
-    monkeypatch.setattr(server_mod.HealthChecker, "stop", lambda self: None)
+    monkeypatch.setattr(server_mod.HealthChecker, "start", lambda _: None)
+    monkeypatch.setattr(server_mod.HealthChecker, "stop", lambda _: None)
 
     calls = {"count": 0}
 
@@ -78,8 +78,8 @@ def test_health_check_now_refreshes_and_matches_health_status(monkeypatch):
 
 
 def test_health_check_now_triggers_a_new_refresh_each_call(monkeypatch):
-    monkeypatch.setattr(server_mod.HealthChecker, "start", lambda self: None)
-    monkeypatch.setattr(server_mod.HealthChecker, "stop", lambda self: None)
+    monkeypatch.setattr(server_mod.HealthChecker, "start", lambda _: None)
+    monkeypatch.setattr(server_mod.HealthChecker, "stop", lambda _: None)
 
     calls = {"count": 0}
 
@@ -122,8 +122,8 @@ def test_health_check_now_triggers_a_new_refresh_each_call(monkeypatch):
 
 
 def test_chat_completion_calls_idle_preflight_hook(monkeypatch):
-    monkeypatch.setattr(server_mod.HealthChecker, "start", lambda self: None)
-    monkeypatch.setattr(server_mod.HealthChecker, "stop", lambda self: None)
+    monkeypatch.setattr(server_mod.HealthChecker, "start", lambda _: None)
+    monkeypatch.setattr(server_mod.HealthChecker, "stop", lambda _: None)
 
     calls = {"count": 0}
 

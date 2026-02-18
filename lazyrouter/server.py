@@ -214,7 +214,7 @@ def create_app(
         results = []
         for model_name in config.llms.keys():
             result = health_checker.last_results.get(model_name)
-            if result:
+            if result is not None:
                 results.append(result)
 
         return HealthStatusResponse(
