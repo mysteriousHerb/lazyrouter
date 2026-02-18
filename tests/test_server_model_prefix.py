@@ -1,9 +1,11 @@
-from lazyrouter.server import (
+from lazyrouter.pipeline import (
     _build_prefix_re,
+    _strip_model_prefixes_from_history,
+)
+from lazyrouter.server import (
     _get_first_response_message,
     _model_prefix,
     _prefix_stream_delta_content_if_needed,
-    _strip_model_prefixes_from_history,
     _with_model_prefix_if_enabled,
 )
 

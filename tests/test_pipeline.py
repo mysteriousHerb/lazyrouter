@@ -304,7 +304,7 @@ def test_select_model_raises_400_for_unknown_model():
     assert exc_info.value.status_code == 400
 
 
-def test_select_model_skips_router_on_tool_continuation(monkeypatch):
+def test_select_model_skips_router_on_tool_continuation():
     """When skip_router_on_tool_results=True and tool cache has a hit, router is bypassed."""
     req = _request(
         session_id="test-session-123",

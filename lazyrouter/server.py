@@ -187,7 +187,7 @@ async def _logged_stream(
                                         existing["name"] = tname
                                 if tname:
                                     streamed_tool_names.add(tname)
-                            delta_content, model_prefix_pending = (
+                            _, model_prefix_pending = (
                                 _prefix_stream_delta_content_if_needed(
                                     delta, response_model_prefix, model_prefix_pending
                                 )
@@ -218,7 +218,7 @@ async def _logged_stream(
             if did_retry:
                 continue
 
-            logger.error(
+            logger.exception(
                 "[stream] provider stream failed after retries; ending stream gracefully: %s",
                 err_text[:320],
             )
@@ -425,7 +425,9 @@ def create_app(
             elif ctx.compression_stats:
                 parts.append(f"history: {ctx.compression_stats['compressed_tokens']}")
             if ctx.routing_reasoning:
-                parts.append(f"why: {ctx.routing_reasoning[:80]}...")
+                truncated = ctx.routing_reasoning[:80]
+                suffix = "..." if len(ctx.routing_reasoning) > 80 else ""
+                parts.append(f"why: {truncated}{suffix}")
             logger.info(f"[routing] {' | '.join(parts)}")
 
             response = await call_with_fallback(ctx, router, health_checker)
