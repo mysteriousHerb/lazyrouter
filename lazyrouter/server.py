@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 import time
 from typing import Any, Dict
 
@@ -97,6 +98,42 @@ def _with_model_prefix_if_enabled(
     if content.startswith(prefix):
         return content
     return f"{prefix}{content}"
+
+
+def _build_prefix_re(known_models: set) -> re.Pattern:
+    """Build a regex that matches only known model name prefixes like [model-name] ."""
+    escaped = sorted((re.escape(m) for m in known_models), key=len, reverse=True)
+    return re.compile(r"^\[(?:" + "|".join(escaped) + r")\] ")
+
+
+def _strip_model_prefixes_from_history(messages: list, known_models: set) -> list:
+    """Remove [model-name] prefixes from assistant messages before sending upstream.
+
+    When show_model_prefix is enabled the server injects a visible prefix into
+    every assistant response.  Those prefixed messages end up stored in the
+    client's conversation history and are sent back on subsequent turns.  If the
+    upstream LLM sees the pattern it will mimic it, and the server then adds
+    another prefix on top, producing stacked prefixes.  Stripping them here
+    keeps the upstream context clean.
+
+    Only strips prefixes matching known configured model names to avoid
+    accidentally removing legitimate content.
+    """
+    if not known_models:
+        return messages
+    prefix_re = _build_prefix_re(known_models)
+    result = []
+    for msg in messages:
+        if msg.get("role") == "assistant":
+            content = msg.get("content")
+            if isinstance(content, str) and prefix_re.match(content):
+                msg = dict(msg)
+                # Strip all stacked prefixes, not just the outermost one.
+                while prefix_re.match(content):
+                    content = prefix_re.sub("", content)
+                msg["content"] = content
+        result.append(msg)
+    return result
 
 
 def _prefix_stream_delta_content_if_needed(
@@ -248,6 +285,12 @@ def create_app(
                 extras = msg.model_extra or {}
                 msg_dict.update(extras)
                 messages.append(msg_dict)
+
+            # Strip any [model] prefixes injected by show_model_prefix from history
+            # so the upstream LLM doesn't mimic the pattern and produce stacked prefixes.
+            show_model_prefix = bool(getattr(config.serve, "show_model_prefix", False))
+            if show_model_prefix:
+                messages = _strip_model_prefixes_from_history(messages, set(config.llms.keys()))
 
             # Build minimal request context needed for cache/session behavior.
             last_user_text_raw = ""
@@ -745,7 +788,6 @@ def create_app(
                 )
 
             response = await call_model_with_fallback()
-            show_model_prefix = bool(getattr(config.serve, "show_model_prefix", False))
             response_model_prefix = _model_prefix(selected_model)
 
             # Handle streaming vs non-streaming
@@ -761,7 +803,7 @@ def create_app(
                     retried_gemini_tool_schema = False
                     retried_gemini_tool_schema_camel = False
                     retried_gemini_without_tools = False
-                    model_prefix_pending = show_model_prefix
+                    model_prefix_pending = show_model_prefix and not is_tool_continuation_turn
                     current_response = response
 
                     def _router_meta() -> Dict[str, Any]:
@@ -1044,7 +1086,7 @@ def create_app(
                 if used_tool_names:
                     logger.info(f"[tool-calls] {used_tool_names}")
 
-                if show_model_prefix and response_message:
+                if show_model_prefix and not is_tool_continuation_turn and response_message:
                     response_message["content"] = _with_model_prefix_if_enabled(
                         response_message.get("content"),
                         selected_model,

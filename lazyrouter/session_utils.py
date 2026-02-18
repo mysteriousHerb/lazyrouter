@@ -1,6 +1,7 @@
 """Session key extraction and per-request compression config helpers."""
 
 import copy
+import hashlib
 import re
 from typing import Any, Dict, List
 
@@ -43,6 +44,16 @@ def extract_session_key(
         if m:
             return f"telegram_user:{m.group(1)}"
         break
+
+    # Last resort: hash the first user message to get a stable per-conversation key.
+    # This allows tool-call pinning to work even when no explicit session id is sent.
+    for msg in messages:
+        if msg.get("role") == "user":
+            text = content_to_text(msg.get("content", "")).strip()
+            if text:
+                digest = hashlib.sha256(text.encode()).hexdigest()[:16]
+                return f"auto:{digest}"
+            break
 
     return None
 
