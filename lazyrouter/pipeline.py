@@ -30,6 +30,11 @@ from .retry_handler import (
     select_fallback_models,
 )
 from .session_utils import build_compression_config_for_request, extract_session_key
+from .sanitizers import (
+    sanitize_messages_for_gemini,
+    sanitize_tool_schema_for_anthropic,
+    sanitize_tool_schema_for_gemini,
+)
 from .tool_cache import (
     infer_pinned_model_from_tool_results,
     tool_cache_clear_session,
@@ -40,6 +45,11 @@ if TYPE_CHECKING:
     from .models import ChatCompletionRequest
 
 logger = logging.getLogger(__name__)
+
+_PASSTHROUGH_EXCLUDE = {
+    "model", "messages", "temperature", "max_tokens", "max_completion_tokens",
+    "stream", "top_p", "n", "stop", "tools", "tool_choice", "stream_options", "store",
+}
 
 
 @dataclasses.dataclass
@@ -76,6 +86,43 @@ class RequestContext:
     provider_api_style: str = ""
     provider_kwargs: Dict[str, Any] = dataclasses.field(default_factory=dict)
     effective_max_tokens: Optional[int] = None
+
+
+# ---------------------------------------------------------------------------
+# Pure helper: provider preparation for a single model
+# ---------------------------------------------------------------------------
+
+def _prepare_for_model(
+    model_name: str,
+    messages: list,
+    request: "ChatCompletionRequest",
+    cfg: "Config",
+) -> tuple:
+    """Pure function: returns (provider_messages, extra_kwargs, api_style) for a model,
+    or (None, None, None) if the model is not found in config."""
+    mc = cfg.llms.get(model_name)
+    if not mc:
+        return None, None, None
+    api_style = cfg.get_api_style(mc.provider).lower()
+    prep_messages = messages
+    prep_extra: Dict[str, Any] = {}
+
+    if api_style == "gemini":
+        prep_messages = sanitize_messages_for_gemini(messages)
+
+    if request.tools:
+        tools = request.tools
+        if api_style == "anthropic":
+            prep_extra["tools"] = sanitize_tool_schema_for_anthropic(tools)
+        elif api_style == "gemini":
+            prep_extra["tools"] = sanitize_tool_schema_for_gemini(tools, output_format="openai")
+        else:
+            prep_extra["tools"] = tools
+
+    if request.tool_choice is not None:
+        prep_extra["tool_choice"] = request.tool_choice
+
+    return prep_messages, prep_extra, api_style
 
 
 # ---------------------------------------------------------------------------
@@ -281,9 +328,6 @@ def compress_context(ctx: RequestContext) -> None:
 
 def prepare_provider(ctx: RequestContext) -> None:
     """Populate ctx.provider_messages, extra_kwargs, provider_api_style, provider_kwargs, effective_max_tokens."""
-    # Import here to avoid circular imports; _prepare_for_model lives in server.py
-    from .server import _prepare_for_model
-
     provider_messages, extra_kwargs, api_style = _prepare_for_model(
         ctx.selected_model, ctx.messages, ctx.request, ctx.config
     )
@@ -304,12 +348,8 @@ def prepare_provider(ctx: RequestContext) -> None:
     if req.stream_options is not None:
         provider_kwargs["stream_options"] = req.stream_options
 
-    passthrough_exclude = {
-        "model", "messages", "temperature", "max_tokens", "max_completion_tokens",
-        "stream", "top_p", "n", "stop", "tools", "tool_choice", "stream_options", "store",
-    }
     for key, value in (req.model_extra or {}).items():
-        if key not in passthrough_exclude and value is not None:
+        if key not in _PASSTHROUGH_EXCLUDE and value is not None:
             provider_kwargs[key] = value
 
     ctx.provider_kwargs = provider_kwargs
@@ -330,8 +370,6 @@ async def _backoff_retry_loop(
 
     Returns (resp, model, mc, api_style, prep_messages, prep_extra) on success, or None.
     """
-    from .server import _prepare_for_model
-
     max_wait = min(ctx.config.health_check.interval, 60)
     start_time = time.monotonic()
     delay = INITIAL_RETRY_DELAY
@@ -344,12 +382,12 @@ async def _backoff_retry_loop(
         await asyncio.sleep(delay)
 
         await health_checker.run_check()
-        tried_models.clear()
 
         healthy_set = health_checker.healthy_models
         retry_models = [original_model] + select_fallback_models(
             original_model, ctx.config.llms, healthy_models=healthy_set, already_tried=tried_models
         )
+        tried_models.clear()
 
         for try_model in retry_models:
             tried_models.add(try_model)
@@ -391,8 +429,6 @@ async def _backoff_retry_loop(
 
 async def call_with_fallback(ctx: RequestContext, router_instance: Any, health_checker: Any) -> Any:
     """Call model with ELO-similar fallback and backoff retry. Mutates ctx on fallback. Returns raw response."""
-    from .server import _prepare_for_model
-
     tried_models: set = set()
     original_model = ctx.selected_model
     healthy_set = health_checker.healthy_models

@@ -17,6 +17,7 @@ from lazyrouter.config import (
 )
 from lazyrouter.models import ChatCompletionRequest
 from lazyrouter.pipeline import RequestContext, normalize_messages, compress_context, prepare_provider, select_model
+from fastapi import HTTPException
 
 
 # ---------------------------------------------------------------------------
@@ -286,8 +287,6 @@ def test_select_model_raises_503_when_no_healthy_models():
         update={"health_check": HealthCheckConfig(enabled=False, interval=1)}
     )
 
-    import pytest
-    from fastapi import HTTPException
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(select_model(ctx, hc, _FakeRouter("m1")))
     assert exc_info.value.status_code == 503
@@ -300,7 +299,6 @@ def test_select_model_raises_400_for_unknown_model():
 
     hc = _FakeHealthChecker(healthy={"m1"})
 
-    from fastapi import HTTPException
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(select_model(ctx, hc, _FakeRouter("m1")))
     assert exc_info.value.status_code == 400
