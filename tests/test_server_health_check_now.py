@@ -120,3 +120,54 @@ def test_health_check_now_triggers_a_new_refresh_each_call(monkeypatch):
     assert first.json()["last_check"] == "run-1"
     assert second.json()["last_check"] == "run-2"
 
+
+def test_chat_completion_calls_idle_preflight_hook(monkeypatch):
+    monkeypatch.setattr(server_mod.HealthChecker, "start", lambda self: None)
+    monkeypatch.setattr(server_mod.HealthChecker, "stop", lambda self: None)
+
+    calls = {"count": 0}
+
+    async def _fake_note_request(self):
+        calls["count"] += 1
+        return False
+
+    async def _fake_call_router_with_gemini_fallback(**kwargs):
+        return {
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "provider-fast",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(
+        server_mod.HealthChecker,
+        "note_request_and_maybe_run_cold_boot_check",
+        _fake_note_request,
+    )
+    monkeypatch.setattr(
+        server_mod,
+        "call_router_with_gemini_fallback",
+        _fake_call_router_with_gemini_fallback,
+    )
+
+    app = server_mod.create_app(preloaded_config=_config())
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "m_fast",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": False,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["model"] == "m_fast"
+    assert calls["count"] == 1

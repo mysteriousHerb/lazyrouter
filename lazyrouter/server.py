@@ -332,6 +332,9 @@ def create_app(
             else:
                 in_names = []
 
+            # If traffic resumes after an idle period, refresh model health before routing.
+            await health_checker.note_request_and_maybe_run_cold_boot_check()
+
             # Determine which model to use
             routing_response = None
             routing_result = None
