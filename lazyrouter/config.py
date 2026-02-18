@@ -119,6 +119,20 @@ class HealthCheckConfig(BaseModel):
 
     interval: int = 300  # seconds between checks
     max_latency_ms: int = 10000  # models slower than this are excluded
+    idle_after_seconds: int = (
+        300  # pause background checks after this many seconds without chat traffic
+    )
+
+    @model_validator(mode="after")
+    def validate_intervals(self) -> "HealthCheckConfig":
+        """Validate health-check timing values."""
+        if self.interval <= 0:
+            raise ValueError("health_check.interval must be > 0")
+        if self.max_latency_ms <= 0:
+            raise ValueError("health_check.max_latency_ms must be > 0")
+        if self.idle_after_seconds <= 0:
+            raise ValueError("health_check.idle_after_seconds must be > 0")
+        return self
 
 
 class Config(BaseModel):

@@ -15,9 +15,19 @@ from .models import HealthCheckResult
 
 logger = logging.getLogger(__name__)
 
-BENCH_PROMPT = [{"role": "user", "content": "Say hi"}]
+BENCH_PROMPT = [{"role": "user", "content": "[lazyrouter-health-check] Say hi"}]
 BENCH_MAX_TOKENS = 16
 BENCH_TEMPERATURE = 0.0
+HEALTH_CHECK_HEADER = {"X-LazyRouter-Request-Type": "health-check"}
+
+
+def is_result_healthy(result: HealthCheckResult, max_latency_ms: int) -> bool:
+    """Return True when a health result is safe to use for routing."""
+    return (
+        result.status == "ok"
+        and result.total_ms is not None
+        and result.total_ms <= max_latency_ms
+    )
 
 
 def _compact_error(error: Exception, limit: int = 240) -> str:
@@ -95,6 +105,11 @@ class LiteLLMWrapper:
     ) -> Union[Dict[str, Any], AsyncGenerator[str, None]]:
         """Send chat completion via LiteLLM"""
         params = self._get_litellm_params(model)
+        existing_headers = params.get("extra_headers")
+        if isinstance(existing_headers, dict):
+            params["extra_headers"] = {**existing_headers, **HEALTH_CHECK_HEADER}
+        else:
+            params["extra_headers"] = dict(HEALTH_CHECK_HEADER)
         params.update(
             {
                 "messages": messages,
@@ -173,6 +188,7 @@ async def check_model_health(
             actual_model=actual_model,
             is_router=is_router,
             status="ok",
+            is_healthy=None,  # Set later in run_check based on latency threshold
             ttft_ms=ttft_ms,
             ttft_source=ttft_source,
             ttft_unavailable_reason=ttft_unavailable_reason,
@@ -208,6 +224,7 @@ async def check_model_health(
                 actual_model=actual_model,
                 is_router=is_router,
                 status="ok",
+                is_healthy=None,  # Set later in run_check based on latency threshold
                 ttft_ms=None,
                 ttft_source=ttft_source,
                 ttft_unavailable_reason=ttft_unavailable_reason,
@@ -220,6 +237,7 @@ async def check_model_health(
                 actual_model=actual_model,
                 is_router=is_router,
                 status="error",
+                is_healthy=False,
                 ttft_ms=ttft_ms,
                 ttft_source=ttft_source,
                 ttft_unavailable_reason=ttft_unavailable_reason,
@@ -243,13 +261,58 @@ class HealthChecker:
         self.last_results: Dict[str, HealthCheckResult] = {}
         self.last_check: Optional[str] = None
         self._task: Optional[asyncio.Task] = None
+        self._run_lock = asyncio.Lock()
+        self._activity_lock = asyncio.Lock()
+        self._activity_event = asyncio.Event()
+        self._last_request_at = time.monotonic()
+        self._idle_mode_active = False
 
     @property
     def unhealthy_models(self) -> Set[str]:
         """Return set of models that failed the last health check."""
         return set(self.config.llms.keys()) - self.healthy_models
 
+    def _seconds_since_last_request(self) -> float:
+        """Return elapsed seconds since the last chat completion request."""
+        return max(0.0, time.monotonic() - self._last_request_at)
+
+    def _is_idle(self) -> bool:
+        """Return True when chat traffic has been inactive long enough."""
+        return self._seconds_since_last_request() >= self.hc_config.idle_after_seconds
+
+    async def note_request_and_maybe_run_cold_boot_check(self) -> bool:
+        """Mark request activity and run a health check when resuming from idle."""
+        should_check = False
+        idle_for = 0.0
+
+        async with self._activity_lock:
+            idle_for = self._seconds_since_last_request()
+            should_check = self._is_idle()
+            self._last_request_at = time.monotonic()
+            self._activity_event.set()
+
+        if not should_check:
+            return False
+
+        logger.info(
+            "[health-check] pre-route check after %.1fs idle before serving request",
+            idle_for,
+        )
+        try:
+            await self.run_check()
+        except Exception as e:
+            logger.warning(
+                "[health-check] pre-route check failed; continuing request with cached status: %s",
+                e,
+            )
+        return True
+
     async def run_check(self) -> list[HealthCheckResult]:
+        """Run a single health check against all configured models."""
+        async with self._run_lock:
+            return await self._run_check_once()
+
+    async def _run_check_once(self) -> list[HealthCheckResult]:
         """Run a single health check against all configured models."""
         tasks = []
         model_names = []
@@ -280,19 +343,24 @@ class HealthChecker:
         for i, r in enumerate(raw_results):
             name = model_names[i]
             if isinstance(r, HealthCheckResult):
+                # Determine if model is healthy (available for routing)
+                is_healthy = is_result_healthy(r, self.hc_config.max_latency_ms)
+                r.is_healthy = is_healthy
+
                 results.append(r)
                 self.last_results[name] = r
-                if (
-                    r.status == "ok"
-                    and r.total_ms is not None
-                    and r.total_ms <= self.hc_config.max_latency_ms
-                ):
+
+                if is_healthy:
                     new_healthy.add(name)
                 else:
                     reason = (
                         r.error
                         if r.status == "error"
-                        else f"total_ms={r.total_ms} > {self.hc_config.max_latency_ms}"
+                        else (
+                            "total_ms unavailable"
+                            if r.total_ms is None
+                            else f"total_ms={r.total_ms} > {self.hc_config.max_latency_ms}"
+                        )
                     )
                     logger.warning(f"Health check: {name} unhealthy — {reason}")
             else:
@@ -304,6 +372,7 @@ class HealthChecker:
                     actual_model=mc.model,
                     is_router=False,
                     status="error",
+                    is_healthy=False,
                     error=err,
                 )
                 results.append(result)
@@ -338,6 +407,24 @@ class HealthChecker:
             logger.error(f"Initial health check failed: {e}")
 
         while True:
+            if self._is_idle():
+                if not self._idle_mode_active:
+                    self._idle_mode_active = True
+                    logger.info(
+                        "[health-check] idle mode enabled: pausing background checks after %.0fs inactivity",
+                        self.hc_config.idle_after_seconds,
+                    )
+                await self._activity_event.wait()
+                self._activity_event.clear()
+                continue
+
+            if self._idle_mode_active:
+                self._idle_mode_active = False
+                logger.info(
+                    "[health-check] idle mode disabled: resuming %ss interval",
+                    self.hc_config.interval,
+                )
+
             await asyncio.sleep(self.hc_config.interval)
             try:
                 await self.run_check()
@@ -346,9 +433,15 @@ class HealthChecker:
 
     def start(self):
         """Start the background health check loop."""
+        self._last_request_at = time.monotonic()
+        self._activity_event.clear()
         logger.info(
             f"Starting health checks every {self.hc_config.interval}s "
             f"(max_latency={self.hc_config.max_latency_ms}ms)"
+        )
+        logger.info(
+            "Background checks pause after %ss idle; first request after idle triggers pre-route health check",
+            self.hc_config.idle_after_seconds,
         )
         self._task = asyncio.create_task(self._loop())
 
@@ -357,3 +450,4 @@ class HealthChecker:
         if self._task:
             self._task.cancel()
             self._task = None
+

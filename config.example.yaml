@@ -113,5 +113,6 @@ context_compression:
   skip_router_on_tool_results: true  # Reuse previous selected model on tool-result follow-ups.
 
 health_check:
-  interval: 1800        # seconds between checks (default: 300)
+  interval: 300          # active interval in seconds while requests are flowing (default: 300)
+  idle_after_seconds: 600  # after this much inactivity, pause background checks (default: 300)
   max_latency_ms: 15000  # models slower than this are unhealthy (default: 10000)

@@ -1,0 +1,1 @@
+uvx --from git+https://github.com/mysteriousHerb/lazyrouter.git lazyrouter --config config.yaml
