@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 import time
 from typing import Any, Dict
 
@@ -97,6 +98,30 @@ def _with_model_prefix_if_enabled(
     if content.startswith(prefix):
         return content
     return f"{prefix}{content}"
+
+
+_MODEL_PREFIX_RE = re.compile(r"^\[[\w\-\.\:]+\] ")
+
+
+def _strip_model_prefixes_from_history(messages: list) -> list:
+    """Remove [model-name] prefixes from assistant messages before sending upstream.
+
+    When show_model_prefix is enabled the server injects a visible prefix into
+    every assistant response.  Those prefixed messages end up stored in the
+    client's conversation history and are sent back on subsequent turns.  If the
+    upstream LLM sees the pattern it will mimic it, and the server then adds
+    another prefix on top, producing stacked prefixes.  Stripping them here
+    keeps the upstream context clean.
+    """
+    result = []
+    for msg in messages:
+        if msg.get("role") == "assistant":
+            content = msg.get("content")
+            if isinstance(content, str) and _MODEL_PREFIX_RE.match(content):
+                msg = dict(msg)
+                msg["content"] = _MODEL_PREFIX_RE.sub("", content)
+        result.append(msg)
+    return result
 
 
 def _prefix_stream_delta_content_if_needed(
@@ -248,6 +273,10 @@ def create_app(
                 extras = msg.model_extra or {}
                 msg_dict.update(extras)
                 messages.append(msg_dict)
+
+            # Strip any [model] prefixes injected by show_model_prefix from history
+            # so the upstream LLM doesn't mimic the pattern and produce stacked prefixes.
+            messages = _strip_model_prefixes_from_history(messages)
 
             # Build minimal request context needed for cache/session behavior.
             last_user_text_raw = ""
