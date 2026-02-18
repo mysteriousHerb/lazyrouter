@@ -20,6 +20,15 @@ BENCH_MAX_TOKENS = 16
 BENCH_TEMPERATURE = 0.0
 
 
+def is_result_healthy(result: HealthCheckResult, max_latency_ms: int) -> bool:
+    """Return True when a health result is safe to use for routing."""
+    return (
+        result.status == "ok"
+        and result.total_ms is not None
+        and result.total_ms <= max_latency_ms
+    )
+
+
 def _compact_error(error: Exception, limit: int = 240) -> str:
     """Return a one-line, bounded error summary for logs."""
     error_str = str(error).strip()
@@ -284,11 +293,7 @@ class HealthChecker:
             name = model_names[i]
             if isinstance(r, HealthCheckResult):
                 # Determine if model is healthy (available for routing)
-                is_healthy = (
-                    r.status == "ok"
-                    and r.total_ms is not None
-                    and r.total_ms <= self.hc_config.max_latency_ms
-                )
+                is_healthy = is_result_healthy(r, self.hc_config.max_latency_ms)
                 r.is_healthy = is_healthy
 
                 results.append(r)

@@ -4,7 +4,6 @@ import asyncio
 import json
 import logging
 import time
-from datetime import datetime, timezone
 from typing import Any, Dict
 
 from fastapi import FastAPI, HTTPException
@@ -16,7 +15,7 @@ from .gemini_retries import (
     call_router_with_gemini_fallback,
     is_gemini_tool_type_proto_error,
 )
-from .health_checker import HealthChecker, check_model_health
+from .health_checker import HealthChecker
 from .message_utils import (
     collect_trailing_tool_results,
     content_to_text,
@@ -25,7 +24,6 @@ from .message_utils import (
 from .model_normalization import normalize_requested_model
 from .models import (
     ChatCompletionRequest,
-    HealthCheckResult,
     HealthResponse,
     HealthStatusResponse,
     ModelInfo,
@@ -211,9 +209,8 @@ def create_app(
         ]
         return ModelListResponse(data=models)
 
-    @app.get("/v1/health-status", response_model=HealthStatusResponse)
-    async def health_status():
-        """Return current health-check state and latest per-model benchmark results."""
+    def _build_health_status_response() -> HealthStatusResponse:
+        """Build health payload from the shared health checker state."""
         results = []
         for model_name in config.llms.keys():
             result = health_checker.last_results.get(model_name)
@@ -228,6 +225,11 @@ def create_app(
             unhealthy_models=sorted(health_checker.unhealthy_models),
             results=results,
         )
+
+    @app.get("/v1/health-status", response_model=HealthStatusResponse)
+    async def health_status():
+        """Return current health-check state and latest per-model benchmark results."""
+        return _build_health_status_response()
 
     @app.post("/v1/chat/completions")
     async def chat_completions(request: ChatCompletionRequest):
@@ -1067,95 +1069,9 @@ def create_app(
             raise HTTPException(status_code=500, detail=str(e))
 
     @app.get("/v1/health-check", response_model=HealthStatusResponse)
-    async def health_check_now(timeout: int = 30):
-        """Run health check on all models now and return results."""
-        from .health_checker import LiteLLMWrapper
-
-        # Build tasks for all configured models
-        tasks = []
-        model_names = []
-        for model_name, model_config in config.llms.items():
-            api_key = config.get_api_key(model_config.provider)
-            base_url = config.get_base_url(model_config.provider)
-            api_style = config.get_api_style(model_config.provider)
-            provider = LiteLLMWrapper(api_key, base_url, api_style, model_config.model)
-
-            model_names.append(model_name)
-            tasks.append(
-                asyncio.wait_for(
-                    check_model_health(
-                        model_name, provider, model_config.model, model_config.provider
-                    ),
-                    timeout=timeout,
-                )
-            )
-
-        # Also check the router model
-        api_key = config.get_api_key(config.router.provider)
-        base_url = config.get_base_url(config.router.provider)
-        api_style = config.get_api_style(config.router.provider)
-        router_model_config = config.llms.get(config.router.model)
-        if router_model_config:
-            router_actual_model = router_model_config.model
-        else:
-            router_actual_model = config.router.model
-
-        # Create LiteLLM wrapper for router
-        router_provider = LiteLLMWrapper(
-            api_key, base_url, api_style, router_actual_model
-        )
-        model_names.append("router")
-        tasks.append(
-            asyncio.wait_for(
-                check_model_health(
-                    "router",
-                    router_provider,
-                    router_actual_model,
-                    config.router.provider,
-                    is_router=True,
-                ),
-                timeout=timeout,
-            )
-        )
-
-        # Run all in parallel
-        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        results = []
-        for i, r in enumerate(raw_results):
-            if isinstance(r, HealthCheckResult):
-                results.append(r)
-            else:
-                # Timeout or unexpected exception
-                name = model_names[i]
-                mc = config.llms.get(name)
-                err = (
-                    f"Timed out after {timeout}s"
-                    if isinstance(r, asyncio.TimeoutError)
-                    else str(r)
-                )
-                results.append(
-                    HealthCheckResult(
-                        model=name,
-                        provider=mc.provider if mc else config.router.provider,
-                        actual_model=mc.model if mc else config.router.model,
-                        is_router=(name == "router"),
-                        status="error",
-                        error=err,
-                    )
-                )
-
-        # Split into healthy/unhealthy based on is_healthy field
-        healthy = sorted([r.model for r in results if r.is_healthy is True])
-        unhealthy = sorted([r.model for r in results if r.is_healthy is not True])
-
-        return HealthStatusResponse(
-            interval=config.health_check.interval,
-            max_latency_ms=config.health_check.max_latency_ms,
-            last_check=datetime.now(timezone.utc).isoformat(),
-            healthy_models=healthy,
-            unhealthy_models=unhealthy,
-            results=results,
-        )
+    async def health_check_now():
+        """Run a fresh health check, then return the same payload as /v1/health-status."""
+        await health_checker.run_check()
+        return _build_health_status_response()
 
     return app
