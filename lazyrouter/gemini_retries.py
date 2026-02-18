@@ -90,3 +90,84 @@ async def call_router_with_gemini_fallback(
                 last_error = retry_error
 
         raise last_error
+
+
+async def apply_gemini_stream_retries(
+    *,
+    replace_stream_fn,
+    extra_kwargs: Dict[str, Any],
+    request,
+    provider_api_style: str,
+    is_tool_continuation_turn: bool,
+    err_text: str,
+    emitted_chunks: int,
+    retried_tool_schema: bool,
+    retried_tool_schema_camel: bool,
+    retried_without_tools: bool,
+) -> tuple:
+    """Attempt Gemini-specific stream retries.
+
+    Returns (did_retry, err_text, retried_tool_schema, retried_tool_schema_camel, retried_without_tools).
+    did_retry=True means replace_stream_fn was called and the caller should `continue` the while loop.
+    Only retries if emitted_chunks == 0 (can't retry mid-stream).
+    """
+    is_gemini = provider_api_style == "gemini"
+    has_tools = bool(request.tools)
+
+    if not is_gemini or not has_tools or emitted_chunks != 0:
+        return False, err_text, retried_tool_schema, retried_tool_schema_camel, retried_without_tools
+
+    is_proto_error = is_gemini_tool_type_proto_error(err_text)
+    retry_tools = extract_retry_tools_for_gemini(request.tools)
+
+    if is_proto_error and not retried_tool_schema:
+        retried_tool_schema = True
+        retry_extra = dict(extra_kwargs)
+        retry_extra["tools"] = sanitize_tool_schema_for_gemini(
+            retry_tools, output_format="native", declaration_key="function_declarations"
+        )
+        logger.warning(
+            "[gemini-tools] retrying stream with native function_declarations schema after error: %s",
+            err_text[:280],
+        )
+        try:
+            await replace_stream_fn(retry_extra)
+            return True, err_text, retried_tool_schema, retried_tool_schema_camel, retried_without_tools
+        except Exception as e:
+            err_text = str(e)
+            logger.warning("[gemini-tools] function_declarations retry failed: %s", err_text[:280])
+
+    if is_gemini_tool_type_proto_error(err_text) and not retried_tool_schema_camel:
+        retried_tool_schema_camel = True
+        retry_extra = dict(extra_kwargs)
+        retry_extra["tools"] = sanitize_tool_schema_for_gemini(
+            retry_tools, output_format="native", declaration_key="functionDeclarations"
+        )
+        logger.warning(
+            "[gemini-tools] retrying stream with native functionDeclarations schema after error: %s",
+            err_text[:280],
+        )
+        try:
+            await replace_stream_fn(retry_extra)
+            return True, err_text, retried_tool_schema, retried_tool_schema_camel, retried_without_tools
+        except Exception as e:
+            err_text = str(e)
+            logger.warning("[gemini-tools] functionDeclarations retry failed: %s", err_text[:280])
+
+    if not retried_without_tools and is_tool_continuation_turn and request.tool_choice is None:
+        retried_without_tools = True
+        retry_extra = dict(extra_kwargs)
+        retry_extra.pop("tools", None)
+        retry_extra["tool_choice"] = "none"
+        logger.warning(
+            "[gemini-tools] retrying tool-result continuation without tools (tool_choice=none) after error: %s",
+            err_text[:280],
+        )
+        try:
+            await replace_stream_fn(retry_extra)
+            return True, err_text, retried_tool_schema, retried_tool_schema_camel, retried_without_tools
+        except Exception as e:
+            err_text = str(e)
+            logger.warning("[gemini-tools] continuation-without-tools retry failed: %s", err_text[:280])
+
+    return False, err_text, retried_tool_schema, retried_tool_schema_camel, retried_without_tools

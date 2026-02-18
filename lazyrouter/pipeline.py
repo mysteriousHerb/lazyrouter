@@ -1,0 +1,459 @@
+"""Pipeline steps for the chat completions request lifecycle.
+
+Each step takes a RequestContext and mutates it in place.
+Infrastructure dependencies (health_checker, router) are explicit parameters.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import dataclasses
+import logging
+import re
+import time
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+from fastapi import HTTPException
+
+from .context_compressor import compress_messages
+from .message_utils import (
+    collect_trailing_tool_results,
+    content_to_text,
+    tool_call_name_by_id,
+)
+from .model_normalization import normalize_requested_model
+from .gemini_retries import call_router_with_gemini_fallback
+from .retry_handler import (
+    INITIAL_RETRY_DELAY,
+    RETRY_MULTIPLIER,
+    is_retryable_error,
+    select_fallback_models,
+)
+from .session_utils import build_compression_config_for_request, extract_session_key
+from .tool_cache import (
+    infer_pinned_model_from_tool_results,
+    tool_cache_clear_session,
+)
+
+if TYPE_CHECKING:
+    from .config import Config, ModelConfig
+    from .models import ChatCompletionRequest
+
+logger = logging.getLogger(__name__)
+
+
+@dataclasses.dataclass
+class RequestContext:
+    """Carries all mutable state through the chat completions pipeline."""
+
+    # Inputs (set once)
+    request: "ChatCompletionRequest"
+    config: "Config"
+
+    # Step 1: message normalisation
+    messages: List[Dict[str, Any]] = dataclasses.field(default_factory=list)
+    session_key: Optional[str] = None
+    is_tool_continuation_turn: bool = False
+    incoming_tool_results: List[Dict[str, Any]] = dataclasses.field(default_factory=list)
+    tool_name_by_id: Dict[str, str] = dataclasses.field(default_factory=dict)
+    last_user_text: str = ""
+    resolved_model: str = ""
+
+    # Step 2: model selection
+    selected_model: Optional[str] = None
+    model_config: Optional["ModelConfig"] = None
+    routing_result: Any = None
+    routing_response: Optional[str] = None
+    routing_reasoning: Optional[str] = None
+    router_skipped_reason: Optional[str] = None
+
+    # Step 3: context compression
+    compression_stats: Optional[Dict[str, Any]] = None
+
+    # Step 4: provider preparation
+    provider_messages: List[Dict[str, Any]] = dataclasses.field(default_factory=list)
+    extra_kwargs: Dict[str, Any] = dataclasses.field(default_factory=dict)
+    provider_api_style: str = ""
+    provider_kwargs: Dict[str, Any] = dataclasses.field(default_factory=dict)
+    effective_max_tokens: Optional[int] = None
+
+
+# ---------------------------------------------------------------------------
+# Step 1: Message normalisation
+# ---------------------------------------------------------------------------
+
+def _build_prefix_re(known_models: set) -> re.Pattern:
+    """Build a regex that matches only known model name prefixes like [model-name] ."""
+    escaped = sorted((re.escape(m) for m in known_models), key=len, reverse=True)
+    return re.compile(r"^\[(?:" + "|".join(escaped) + r")\] ")
+
+
+def _strip_model_prefixes_from_history(messages: list, known_models: set) -> list:
+    """Remove [model-name] prefixes from assistant messages before sending upstream."""
+    if not known_models:
+        return messages
+    prefix_re = _build_prefix_re(known_models)
+    result = []
+    for msg in messages:
+        if msg.get("role") == "assistant":
+            content = msg.get("content")
+            if isinstance(content, str) and prefix_re.match(content):
+                msg = dict(msg)
+                while prefix_re.match(content):
+                    content = prefix_re.sub("", content)
+                msg["content"] = content
+        result.append(msg)
+    return result
+
+
+def normalize_messages(ctx: RequestContext) -> None:
+    """Populate ctx.messages, session_key, tool state, last_user_text, resolved_model."""
+    request = ctx.request
+    messages = []
+    for msg in request.messages:
+        msg_dict = {"role": msg.role, "content": msg.content}
+        extras = msg.model_extra or {}
+        msg_dict.update(extras)
+        messages.append(msg_dict)
+
+    last_user_text_raw = ""
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            last_user_text_raw = content_to_text(msg.get("content", ""))
+            break
+
+    show_model_prefix = bool(getattr(ctx.config.serve, "show_model_prefix", False))
+    if show_model_prefix:
+        messages = _strip_model_prefixes_from_history(messages, set(ctx.config.llms.keys()))
+
+    session_key = extract_session_key(request, messages)
+    if "/new" in last_user_text_raw or "/reset" in last_user_text_raw:
+        cleared_tool = tool_cache_clear_session(session_key)
+        if cleared_tool:
+            logger.info(
+                "[session-cache] cleared_tool=%s reason=session_reset session=%s",
+                cleared_tool,
+                session_key,
+            )
+
+    last_user_text = " ".join(last_user_text_raw.split())
+    if len(last_user_text) > 420:
+        last_user_text = last_user_text[:420] + "..."
+
+    tool_name_by_id = tool_call_name_by_id(messages)
+    incoming_tool_results = collect_trailing_tool_results(messages)
+    is_tool_continuation_turn = bool(incoming_tool_results)
+    resolved_model = normalize_requested_model(request.model, ctx.config.llms)
+
+    ctx.messages = messages
+    ctx.session_key = session_key
+    ctx.last_user_text = last_user_text
+    ctx.tool_name_by_id = tool_name_by_id
+    ctx.incoming_tool_results = incoming_tool_results
+    ctx.is_tool_continuation_turn = is_tool_continuation_turn
+    ctx.resolved_model = resolved_model
+
+
+# ---------------------------------------------------------------------------
+# Step 2: Model selection
+# ---------------------------------------------------------------------------
+
+async def _wait_for_healthy_models(ctx: RequestContext, health_checker: Any) -> bool:
+    """Backoff-poll until at least one healthy model exists. Returns False if timed out."""
+    if len(ctx.config.llms) == 0:
+        return True
+    if len(health_checker.healthy_models) > 0:
+        return True
+
+    max_wait = min(ctx.config.health_check.interval, 60)
+    start_time = time.monotonic()
+    delay = INITIAL_RETRY_DELAY
+
+    while True:
+        elapsed = time.monotonic() - start_time
+        if elapsed >= max_wait:
+            break
+        logger.warning(
+            "[health-check] no healthy models, waiting %.1fs (%.0f/%.0fs until next check)",
+            delay,
+            elapsed,
+            max_wait,
+        )
+        await asyncio.sleep(delay)
+        await health_checker.run_check()
+        if len(health_checker.healthy_models) > 0:
+            logger.info("[health-check] models recovered: %s", list(health_checker.healthy_models))
+            return True
+        elapsed = time.monotonic() - start_time
+        delay = min(delay * RETRY_MULTIPLIER, max_wait - elapsed)
+        if delay <= 0:
+            break
+    return False
+
+
+async def select_model(ctx: RequestContext, health_checker: Any, router: Any) -> None:
+    """Select model and populate ctx.selected_model, model_config, routing_result, etc."""
+    await health_checker.note_request_and_maybe_run_cold_boot_check()
+
+    if ctx.resolved_model == "auto":
+        has_healthy = await _wait_for_healthy_models(ctx, health_checker)
+        if not has_healthy and len(ctx.config.llms) > 0:
+            logger.warning("[health-check] no healthy models available after retries; rejecting auto request")
+            raise HTTPException(status_code=503, detail="No healthy models available")
+
+        selected_model = None
+        skip_router_on_tool_results = bool(
+            getattr(ctx.config.context_compression, "skip_router_on_tool_results", True)
+        )
+
+        if skip_router_on_tool_results and ctx.is_tool_continuation_turn:
+            pinned_model, matched_count, total_count = infer_pinned_model_from_tool_results(
+                ctx.session_key, ctx.incoming_tool_results, ctx.tool_name_by_id
+            )
+            if pinned_model and pinned_model in ctx.config.llms:
+                if pinned_model in health_checker.unhealthy_models:
+                    logger.warning("[router-skip] cached model unhealthy, rerouting: %s", pinned_model)
+                else:
+                    selected_model = pinned_model
+                    ctx.router_skipped_reason = f"cached {matched_count}/{total_count}"
+                    logger.debug("[router-skip] using cached model: %s", selected_model)
+
+        if selected_model is None:
+            routing_result = await router.route(
+                ctx.messages,
+                exclude_models=health_checker.unhealthy_models or None,
+            )
+            selected_model = routing_result.model
+            ctx.routing_result = routing_result
+            ctx.routing_response = routing_result.raw_response
+            ctx.routing_reasoning = routing_result.reasoning
+    else:
+        selected_model = ctx.resolved_model
+        logger.info("Using specified model: %s", selected_model)
+
+    model_config = ctx.config.llms.get(selected_model)
+    if not model_config:
+        raise HTTPException(status_code=400, detail=f"Model '{selected_model}' not found")
+
+    ctx.selected_model = selected_model
+    ctx.model_config = model_config
+
+
+# ---------------------------------------------------------------------------
+# Step 3: Context compression
+# ---------------------------------------------------------------------------
+
+def compress_context(ctx: RequestContext) -> None:
+    """Optionally compress ctx.messages; sets ctx.compression_stats."""
+    if not ctx.config.context_compression.history_trimming:
+        return
+
+    compression_cfg = build_compression_config_for_request(
+        ctx.config.context_compression,
+        is_tool_continuation_turn=ctx.is_tool_continuation_turn,
+    )
+    if ctx.is_tool_continuation_turn:
+        continuation_keep_recent = getattr(
+            ctx.config.context_compression,
+            "keep_recent_user_turns_in_chained_tool_calls",
+            None,
+        )
+        if continuation_keep_recent is not None:
+            logger.debug(
+                "[history-compression] tool continuation keep_recent_user_turns=%s",
+                compression_cfg.keep_recent_exchanges,
+            )
+        logger.debug(
+            "[history-compression] tool continuation hard cap disabled (max_history_tokens=%s)",
+            compression_cfg.max_history_tokens,
+        )
+
+    messages, comp_stats = compress_messages(
+        ctx.messages, compression_cfg, model=ctx.model_config.model
+    )
+    ctx.messages = messages
+    ctx.compression_stats = comp_stats.to_dict()
+
+
+# ---------------------------------------------------------------------------
+# Step 4: Provider preparation
+# ---------------------------------------------------------------------------
+
+def prepare_provider(ctx: RequestContext) -> None:
+    """Populate ctx.provider_messages, extra_kwargs, provider_api_style, provider_kwargs, effective_max_tokens."""
+    # Import here to avoid circular imports; _prepare_for_model lives in server.py
+    from .server import _prepare_for_model
+
+    provider_messages, extra_kwargs, api_style = _prepare_for_model(
+        ctx.selected_model, ctx.messages, ctx.request, ctx.config
+    )
+    ctx.provider_messages = provider_messages
+    ctx.extra_kwargs = extra_kwargs
+    ctx.provider_api_style = api_style
+
+    ctx.effective_max_tokens = ctx.request.max_tokens or ctx.request.max_completion_tokens
+
+    provider_kwargs: Dict[str, Any] = {}
+    req = ctx.request
+    if req.top_p is not None:
+        provider_kwargs["top_p"] = req.top_p
+    if req.stop is not None:
+        provider_kwargs["stop"] = req.stop
+    if req.n is not None:
+        provider_kwargs["n"] = req.n
+    if req.stream_options is not None:
+        provider_kwargs["stream_options"] = req.stream_options
+
+    passthrough_exclude = {
+        "model", "messages", "temperature", "max_tokens", "max_completion_tokens",
+        "stream", "top_p", "n", "stop", "tools", "tool_choice", "stream_options", "store",
+    }
+    for key, value in (req.model_extra or {}).items():
+        if key not in passthrough_exclude and value is not None:
+            provider_kwargs[key] = value
+
+    ctx.provider_kwargs = provider_kwargs
+
+
+# ---------------------------------------------------------------------------
+# Step 5: Model call with fallback
+# ---------------------------------------------------------------------------
+
+async def _backoff_retry_loop(
+    ctx: RequestContext,
+    original_model: str,
+    tried_models: set,
+    router_instance: Any,
+    health_checker: Any,
+) -> Optional[tuple]:
+    """Retry with exponential backoff until next health check interval.
+
+    Returns (resp, model, mc, api_style, prep_messages, prep_extra) on success, or None.
+    """
+    from .server import _prepare_for_model
+
+    max_wait = min(ctx.config.health_check.interval, 60)
+    start_time = time.monotonic()
+    delay = INITIAL_RETRY_DELAY
+
+    while True:
+        elapsed = time.monotonic() - start_time
+        if elapsed >= max_wait:
+            break
+        logger.warning("[backoff] all models failed, waiting %.1fs (%.0f/%.0fs)", delay, elapsed, max_wait)
+        await asyncio.sleep(delay)
+
+        await health_checker.run_check()
+        tried_models.clear()
+
+        healthy_set = health_checker.healthy_models
+        retry_models = [original_model] + select_fallback_models(
+            original_model, ctx.config.llms, healthy_models=healthy_set, already_tried=tried_models
+        )
+
+        for try_model in retry_models:
+            tried_models.add(try_model)
+            mc = ctx.config.llms.get(try_model)
+            if not mc:
+                continue
+            prep_messages, prep_extra, api_style = _prepare_for_model(
+                try_model, ctx.messages, ctx.request, ctx.config
+            )
+            if prep_messages is None:
+                continue
+            try:
+                logger.info("[backoff] retrying model=%s", try_model)
+                resp = await call_router_with_gemini_fallback(
+                    router_instance=router_instance,
+                    selected_model=try_model,
+                    provider_messages=prep_messages,
+                    request=ctx.request,
+                    extra_kwargs=prep_extra,
+                    provider_kwargs=ctx.provider_kwargs,
+                    provider_api_style=api_style,
+                    is_tool_continuation_turn=ctx.is_tool_continuation_turn,
+                    effective_max_tokens=ctx.effective_max_tokens,
+                )
+                logger.info("[backoff] succeeded with %s", try_model)
+                return (resp, try_model, mc, api_style, prep_messages, prep_extra)
+            except Exception as e:
+                if not is_retryable_error(e):
+                    raise
+                continue
+
+        elapsed = time.monotonic() - start_time
+        delay = min(delay * RETRY_MULTIPLIER, max_wait - elapsed)
+        if delay <= 0:
+            break
+
+    return None
+
+
+async def call_with_fallback(ctx: RequestContext, router_instance: Any, health_checker: Any) -> Any:
+    """Call model with ELO-similar fallback and backoff retry. Mutates ctx on fallback. Returns raw response."""
+    from .server import _prepare_for_model
+
+    tried_models: set = set()
+    original_model = ctx.selected_model
+    healthy_set = health_checker.healthy_models
+
+    models_to_try = [ctx.selected_model] + select_fallback_models(
+        ctx.selected_model, ctx.config.llms, healthy_models=healthy_set, already_tried=tried_models
+    )
+
+    last_error = None
+    for try_model in models_to_try:
+        tried_models.add(try_model)
+        mc = ctx.config.llms.get(try_model)
+        if not mc:
+            continue
+        prep_messages, prep_extra, api_style = _prepare_for_model(
+            try_model, ctx.messages, ctx.request, ctx.config
+        )
+        if prep_messages is None:
+            continue
+        try:
+            logger.info("[model-call] trying model=%s", try_model)
+            resp = await call_router_with_gemini_fallback(
+                router_instance=router_instance,
+                selected_model=try_model,
+                provider_messages=prep_messages,
+                request=ctx.request,
+                extra_kwargs=prep_extra,
+                provider_kwargs=ctx.provider_kwargs,
+                provider_api_style=api_style,
+                is_tool_continuation_turn=ctx.is_tool_continuation_turn,
+                effective_max_tokens=ctx.effective_max_tokens,
+            )
+            if try_model != original_model:
+                logger.info("[fallback] succeeded with %s (ELO-similar) after %s failed", try_model, original_model)
+            ctx.selected_model = try_model
+            ctx.model_config = mc
+            ctx.provider_api_style = api_style
+            ctx.provider_messages = prep_messages
+            ctx.extra_kwargs = prep_extra
+            return resp
+        except Exception as e:
+            last_error = e
+            if is_retryable_error(e):
+                logger.warning("[fallback] model %s failed with retryable error: %s", try_model, str(e)[:200])
+                continue
+            else:
+                logger.error("[fallback] model %s failed with non-retryable error: %s", try_model, str(e)[:200])
+                raise
+
+    # All models failed — backoff until next health check
+    if last_error and is_retryable_error(last_error):
+        result = await _backoff_retry_loop(ctx, original_model, tried_models, router_instance, health_checker)
+        if result is not None:
+            resp, try_model, mc, api_style, prep_messages, prep_extra = result
+            ctx.selected_model = try_model
+            ctx.model_config = mc
+            ctx.provider_api_style = api_style
+            ctx.provider_messages = prep_messages
+            ctx.extra_kwargs = prep_extra
+            return resp
+
+    if last_error:
+        raise last_error
+    raise HTTPException(status_code=503, detail="All models were skipped or unavailable")
