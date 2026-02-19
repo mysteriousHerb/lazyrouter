@@ -113,18 +113,13 @@ def _prepare_for_model(
     if request.tools:
         tools = request.tools
         if api_style == "anthropic":
-            sanitized = sanitize_tool_schema_for_anthropic(tools)
-            # Add cache marker to last tool so system+tools prefix is cached
-            if sanitized:
-                sanitized[-1]["cache_control"] = {"type": "ephemeral"}
-            prep_extra["tools"] = sanitized
+            prep_extra["tools"] = sanitize_tool_schema_for_anthropic(tools)
         elif api_style == "gemini":
             prep_extra["tools"] = sanitize_tool_schema_for_gemini(tools, output_format="openai")
         else:
             prep_extra["tools"] = tools
 
-    # For Anthropic: mark system message as cacheable so it's included in the
-    # cached prefix alongside the tools above.
+    # For Anthropic: mark system message as cacheable.
     if api_style == "anthropic":
         new_messages = []
         for msg in prep_messages:

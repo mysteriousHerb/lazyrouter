@@ -338,7 +338,7 @@ def test_prepare_provider_anthropic_adds_cache_to_system():
     assert sys_msg["content"][0]["text"] == "You are a helpful assistant."
 
 
-def test_prepare_provider_anthropic_adds_cache_to_last_tool():
+def test_prepare_provider_anthropic_does_not_add_cache_to_tools():
     cfg = _anthropic_config()
     tools = [
         {"type": "function", "function": {"name": "read", "parameters": {"type": "object", "properties": {}}}},
@@ -354,7 +354,7 @@ def test_prepare_provider_anthropic_adds_cache_to_last_tool():
 
     result_tools = ctx.extra_kwargs["tools"]
     assert "cache_control" not in result_tools[0]
-    assert result_tools[-1]["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in result_tools[-1]
 
 
 def test_prepare_provider_anthropic_adds_cache_to_system_block_list():
