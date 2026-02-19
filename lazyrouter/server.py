@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 
 from .config import Config, load_config
+from .exchange_logger import log_exchange
 from .gemini_retries import apply_gemini_stream_retries
 from .health_checker import HealthChecker
 from .models import (
@@ -103,6 +104,7 @@ async def _logged_stream(
     response: Any,
     response_model_prefix: str,
     show_model_prefix: bool,
+    start_time: float = 0.0,
 ):
     """Wrap streaming response with logging and Gemini retry handling."""
     request = ctx.request
@@ -249,6 +251,17 @@ async def _logged_stream(
         tool_cache_set(ctx.session_key, tcid, ctx.selected_model, tname)
     if streamed_tool_names:
         logger.info(f"[tool-calls] {sorted(streamed_tool_names)}")
+
+    latency_ms = (time.time() - start_time) * 1000 if start_time else 0.0
+    log_exchange(
+        "server",
+        request_id,
+        ctx.request.model_dump(exclude_none=True),
+        None,
+        latency_ms,
+        True,
+        extra={"selected_model": ctx.selected_model, "session_key": ctx.session_key},
+    )
 
 
 def _assemble_non_streaming_response(
@@ -430,17 +443,29 @@ def create_app(
                 parts.append(f"why: {truncated}{suffix}")
             logger.info(f"[routing] {' | '.join(parts)}")
 
+            start_time = time.time()
             response = await call_with_fallback(ctx, router, health_checker)
             show_model_prefix = bool(getattr(config.serve, "show_model_prefix", False))
             response_model_prefix = _model_prefix(ctx.selected_model)
             # Handle streaming vs non-streaming
             if request.stream:
                 return StreamingResponse(
-                    _logged_stream(ctx, response, response_model_prefix, show_model_prefix),
+                    _logged_stream(ctx, response, response_model_prefix, show_model_prefix, start_time),
                     media_type="text/event-stream",
                 )
             else:
-                return _assemble_non_streaming_response(ctx, response, show_model_prefix)
+                latency_ms = (time.time() - start_time) * 1000
+                result = _assemble_non_streaming_response(ctx, response, show_model_prefix)
+                log_exchange(
+                    "server",
+                    result.get("id", "unknown"),
+                    request.model_dump(exclude_none=True),
+                    result,
+                    latency_ms,
+                    False,
+                    extra={"selected_model": ctx.selected_model, "session_key": ctx.session_key},
+                )
+                return result
 
         except HTTPException:
             raise
