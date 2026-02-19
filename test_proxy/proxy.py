@@ -17,7 +17,7 @@ import re
 import time
 import uuid
 from contextlib import asynccontextmanager
-
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Optional
 from urllib.parse import unquote
@@ -27,8 +27,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
 from lazyrouter.config import Config, load_config
-from lazyrouter.exchange_logger import configure_log_dir as _configure_exchange_log_dir
-from lazyrouter.exchange_logger import get_log_path, log_exchange
+from lazyrouter.error_logger import sanitize_for_log
 from lazyrouter.model_normalization import (
     normalize_requested_model as normalize_model_id,
 )
@@ -50,7 +49,6 @@ def configure_log_dir(log_dir: str) -> None:
     global LOG_DIR
     LOG_DIR = Path(log_dir)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    _configure_exchange_log_dir(log_dir)
 
 
 configure_log_dir(str(LOG_DIR))
@@ -225,6 +223,11 @@ def resolve_gemini_model_path(path: str) -> tuple[str, Optional[str]]:
     return normalized_path, None
 
 
+def get_log_path(api_style: str) -> Path:
+    """Get log file path for a given API style."""
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return LOG_DIR / f"{api_style}_{date_str}.jsonl"
+
 
 _REDACTABLE_QUERY_PARAM_PATTERN = re.compile(
     r"([?&](?:key|api_key|x-api-key)=)([^&\s]+)",
@@ -273,6 +276,59 @@ def _pop_header(headers: Dict[str, str], header_name: str) -> Optional[str]:
             return headers.pop(key)
     return None
 
+
+def log_exchange(
+    api_style: str,
+    request_id: str,
+    request_data: Dict[str, Any],
+    response_data: Any,
+    latency_ms: float,
+    is_stream: bool,
+    error: Optional[str] = None,
+    request_headers: Optional[Dict[str, str]] = None,
+) -> None:
+    """Log a request/response exchange to JSONL."""
+    redacted_headers: Optional[Dict[str, str]] = None
+    if request_headers is not None:
+        sensitive_header_keys = {
+            "authorization",
+            "x-api-key",
+            "x-goog-api-key",
+            "cookie",
+            "set-cookie",
+            "proxy-authorization",
+        }
+        redacted_headers = {}
+        for key, value in request_headers.items():
+            if key.lower() in sensitive_header_keys:
+                redacted_headers[key] = "[REDACTED]"
+            else:
+                redacted_headers[key] = value
+
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "request_id": request_id,
+        "api_style": api_style,
+        "is_stream": is_stream,
+        "latency_ms": round(latency_ms, 2),
+        "request": sanitize_for_log(request_data),
+        "request_headers": redacted_headers,
+        "response": sanitize_for_log(response_data),
+        "error": error,
+    }
+
+    log_path = get_log_path(api_style)
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+
+    logger.info(
+        "[logged] api=%s id=%s stream=%s latency=%.0fms path=%s",
+        api_style,
+        request_id[:8],
+        is_stream,
+        latency_ms,
+        log_path.name,
+    )
 
 
 @asynccontextmanager

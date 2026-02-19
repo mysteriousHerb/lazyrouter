@@ -1,18 +1,14 @@
 #!/usr/bin/env python3
 """
-Analyze payload growth across conversation in logs.
+Analyze payload growth across conversation in test_proxy logs.
 
 Shows how request size grows over time and identifies compression opportunities.
 """
 
-import argparse
 import json
 import sys
 from pathlib import Path
 from typing import List, Dict, Any
-
-sys.path.insert(0, str(Path(__file__).parent))
-from _utils import add_source_args, resolve_log_file, SOURCE_DIRS
 
 
 def analyze_payload_growth(log_file: Path) -> List[Dict[str, Any]]:
@@ -71,7 +67,7 @@ def analyze_payload_growth(log_file: Path) -> List[Dict[str, Any]]:
                 'history_size': history_size,
                 'total_size': total_size,
                 'message_breakdown': message_breakdown,
-                'usage': (entry.get('response') or {}).get('usage', {})
+                'usage': entry.get('response', {}).get('usage', {})
             })
 
     return entries
@@ -140,9 +136,9 @@ def print_analysis(entries: List[Dict[str, Any]], savings: Dict[str, Any]):
 
     print("GROWTH METRICS:")
     print("-" * 80)
-    print(f"Messages:        {first['message_count']:>6} -> {last['message_count']:>6} ({last['message_count'] - first['message_count']:+d})")
-    print(f"History size:    {first['history_size']:>6,} -> {last['history_size']:>6,} ({last['history_size'] - first['history_size']:+,} bytes)")
-    print(f"Total payload:   {first['total_size']:>6,} -> {last['total_size']:>6,} ({last['total_size'] - first['total_size']:+,} bytes)")
+    print(f"Messages:        {first['message_count']:>6} → {last['message_count']:>6} ({last['message_count'] - first['message_count']:+d})")
+    print(f"History size:    {first['history_size']:>6,} → {last['history_size']:>6,} ({last['history_size'] - first['history_size']:+,} bytes)")
+    print(f"Total payload:   {first['total_size']:>6,} → {last['total_size']:>6,} ({last['total_size'] - first['total_size']:+,} bytes)")
     print()
 
     # Static vs dynamic
@@ -150,7 +146,7 @@ def print_analysis(entries: List[Dict[str, Any]], savings: Dict[str, Any]):
     print("-" * 80)
     avg_static = (first['system_size'] + first['tools_size'])
     print(f"Static (system + tools): ~{avg_static:,} bytes (sent every request)")
-    print(f"Dynamic (history):       {first['history_size']:,} -> {last['history_size']:,} bytes (grows over time)")
+    print(f"Dynamic (history):       {first['history_size']:,} → {last['history_size']:,} bytes (grows over time)")
     print()
 
     # Message type breakdown
@@ -186,7 +182,7 @@ def print_analysis(entries: List[Dict[str, Any]], savings: Dict[str, Any]):
 
     print("WITHOUT CACHING:")
     print(f"  Total payload: {savings['total_without_cache']:,} bytes")
-    print(f"  Static sent {savings['request_count']} times: {savings['avg_static_size']:,} x {savings['request_count']} = {savings['avg_static_size'] * savings['request_count']:,} bytes")
+    print(f"  Static sent {savings['request_count']} times: {savings['avg_static_size']:,} × {savings['request_count']} = {savings['avg_static_size'] * savings['request_count']:,} bytes")
     print()
 
     print("WITH CACHING:")
@@ -222,13 +218,11 @@ def print_analysis(entries: List[Dict[str, Any]], savings: Dict[str, Any]):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Analyze payload growth from logs.")
-    add_source_args(parser)
-    args = parser.parse_args()
+    log_file = Path("logs/test_proxy/openai_completions_2026-02-18.jsonl")
 
-    log_file = resolve_log_file(args.source, getattr(args, "file", None))
-    source = args.source if not getattr(args, "file", None) else "custom"
-    output_dir = SOURCE_DIRS.get(source, log_file.parent)
+    if not log_file.exists():
+        print(f"Error: Log file not found: {log_file}")
+        sys.exit(1)
 
     print(f"Analyzing payload growth from: {log_file}")
     print()
@@ -239,7 +233,7 @@ def main():
     print_analysis(entries, savings)
 
     # Export to JSON
-    output_file = output_dir / "payload_growth_analysis.json"
+    output_file = Path("logs/test_proxy/payload_growth_analysis.json")
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump({
             'entries': entries,

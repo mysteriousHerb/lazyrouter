@@ -113,37 +113,11 @@ def _prepare_for_model(
     if request.tools:
         tools = request.tools
         if api_style == "anthropic":
-            sanitized = sanitize_tool_schema_for_anthropic(tools)
-            # Add cache marker to last tool so system+tools prefix is cached
-            if sanitized:
-                last = dict(sanitized[-1])
-                last["cache_control"] = {"type": "ephemeral"}
-                sanitized = sanitized[:-1] + [last]
-            prep_extra["tools"] = sanitized
+            prep_extra["tools"] = sanitize_tool_schema_for_anthropic(tools)
         elif api_style == "gemini":
             prep_extra["tools"] = sanitize_tool_schema_for_gemini(tools, output_format="openai")
         else:
             prep_extra["tools"] = tools
-
-    # For Anthropic: mark system message as cacheable so it's included in the
-    # cached prefix alongside the tools above.
-    if api_style == "anthropic":
-        new_messages = []
-        for msg in prep_messages:
-            if msg.get("role") == "system":
-                content = msg.get("content", "")
-                if isinstance(content, str) and content:
-                    msg = dict(msg)
-                    msg["content"] = [
-                        {"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}
-                    ]
-                elif isinstance(content, list) and content:
-                    last_block = dict(content[-1])
-                    last_block["cache_control"] = {"type": "ephemeral"}
-                    msg = dict(msg)
-                    msg["content"] = content[:-1] + [last_block]
-            new_messages.append(msg)
-        prep_messages = new_messages
 
     if request.tool_choice is not None:
         prep_extra["tool_choice"] = request.tool_choice
