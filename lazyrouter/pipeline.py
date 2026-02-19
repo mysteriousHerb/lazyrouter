@@ -116,9 +116,7 @@ def _prepare_for_model(
             sanitized = sanitize_tool_schema_for_anthropic(tools)
             # Add cache marker to last tool so system+tools prefix is cached
             if sanitized:
-                last = dict(sanitized[-1])
-                last["cache_control"] = {"type": "ephemeral"}
-                sanitized = sanitized[:-1] + [last]
+                sanitized[-1]["cache_control"] = {"type": "ephemeral"}
             prep_extra["tools"] = sanitized
         elif api_style == "gemini":
             prep_extra["tools"] = sanitize_tool_schema_for_gemini(tools, output_format="openai")
