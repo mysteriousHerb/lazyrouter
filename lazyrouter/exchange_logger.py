@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -11,6 +12,11 @@ from .error_logger import sanitize_for_log
 logger = logging.getLogger(__name__)
 
 _LOG_DIR = Path("logs/server")
+_LOG_MESSAGE_CONTENT = os.getenv("LAZYROUTER_LOG_MESSAGE_CONTENT", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+}
 
 
 def configure_log_dir(log_dir: str) -> None:
@@ -43,6 +49,29 @@ def _redact_headers(headers: Dict[str, str]) -> Dict[str, str]:
     }
 
 
+def _redact_message_content(value: Any) -> Any:
+    """Recursively redact message content fields when requested."""
+    if isinstance(value, dict):
+        redacted: Dict[str, Any] = {}
+        for key, item in value.items():
+            if key == "content":
+                redacted[key] = "[REDACTED]"
+            else:
+                redacted[key] = _redact_message_content(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_message_content(item) for item in value]
+    return value
+
+
+def _sanitize_exchange_payload(payload: Any) -> Any:
+    """Sanitize payload and optionally redact message content."""
+    sanitized = sanitize_for_log(payload)
+    if _LOG_MESSAGE_CONTENT:
+        return sanitized
+    return _redact_message_content(sanitized)
+
+
 def log_exchange(
     label: str,
     request_id: str,
@@ -73,9 +102,9 @@ def log_exchange(
         "label": label,
         "is_stream": is_stream,
         "latency_ms": round(latency_ms, 2),
-        "request": sanitize_for_log(request_data),
+        "request": _sanitize_exchange_payload(request_data),
         "request_headers": _redact_headers(request_headers) if request_headers else None,
-        "response": sanitize_for_log(response_data),
+        "response": _sanitize_exchange_payload(response_data),
         "error": error,
     }
     if extra:
