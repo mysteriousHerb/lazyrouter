@@ -125,9 +125,8 @@ def _prepare_for_model(
         else:
             prep_extra["tools"] = tools
 
-    # For Anthropic: mark system message as cacheable. If the prompt contains a
-    # dynamic tail (## Inbound Context or ## Runtime), split into two blocks so
-    # only the stable prefix is cached and the dynamic tail is sent uncached.
+    # For Anthropic: mark system message as cacheable so it's included in the
+    # cached prefix alongside the tools above.
     if api_style == "anthropic":
         new_messages = []
         for msg in prep_messages:
@@ -135,19 +134,9 @@ def _prepare_for_model(
                 content = msg.get("content", "")
                 if isinstance(content, str) and content:
                     msg = dict(msg)
-                    split_marker = "\n## Inbound Context"
-                    idx = content.find(split_marker)
-                    if idx != -1:
-                        static = content[:idx]
-                        dynamic = content[idx:]
-                        msg["content"] = [
-                            {"type": "text", "text": static, "cache_control": {"type": "ephemeral"}},
-                            {"type": "text", "text": dynamic},
-                        ]
-                    else:
-                        msg["content"] = [
-                            {"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}
-                        ]
+                    msg["content"] = [
+                        {"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}
+                    ]
                 elif isinstance(content, list) and content:
                     last_block = dict(content[-1])
                     last_block["cache_control"] = {"type": "ephemeral"}
