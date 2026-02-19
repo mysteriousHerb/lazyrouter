@@ -304,6 +304,112 @@ def test_select_model_raises_400_for_unknown_model():
     assert exc_info.value.status_code == 400
 
 
+# ---------------------------------------------------------------------------
+# Anthropic prompt caching
+# ---------------------------------------------------------------------------
+
+def _anthropic_config() -> Config:
+    return Config(
+        serve=ServeConfig(),
+        router=RouterConfig(provider="p1", model="m1"),
+        providers={"p1": ProviderConfig(api_key="k", api_style="anthropic")},
+        llms={"m1": ModelConfig(provider="p1", model="claude-sonnet", description="claude")},
+        health_check=HealthCheckConfig(enabled=False),
+    )
+
+
+def test_prepare_provider_anthropic_adds_cache_to_system():
+    cfg = _anthropic_config()
+    tools = [{"type": "function", "function": {"name": "read", "parameters": {"type": "object", "properties": {}}}}]
+    req = _request(tools=tools)
+    ctx = _ctx(request=req, config=cfg)
+    ctx.messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "hi"},
+    ]
+    ctx.selected_model = "m1"
+    ctx.model_config = cfg.llms["m1"]
+
+    prepare_provider(ctx)
+
+    sys_msg = next(m for m in ctx.provider_messages if m["role"] == "system")
+    assert isinstance(sys_msg["content"], list)
+    assert sys_msg["content"][0]["cache_control"] == {"type": "ephemeral"}
+    assert sys_msg["content"][0]["text"] == "You are a helpful assistant."
+
+
+def test_prepare_provider_anthropic_adds_cache_to_last_tool():
+    cfg = _anthropic_config()
+    tools = [
+        {"type": "function", "function": {"name": "read", "parameters": {"type": "object", "properties": {}}}},
+        {"type": "function", "function": {"name": "write", "parameters": {"type": "object", "properties": {}}}},
+    ]
+    req = _request(tools=tools)
+    ctx = _ctx(request=req, config=cfg)
+    ctx.messages = [{"role": "user", "content": "hi"}]
+    ctx.selected_model = "m1"
+    ctx.model_config = cfg.llms["m1"]
+
+    prepare_provider(ctx)
+
+    result_tools = ctx.extra_kwargs["tools"]
+    assert "cache_control" not in result_tools[0]
+    assert result_tools[-1]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_prepare_provider_anthropic_adds_cache_to_system_block_list():
+    cfg = _anthropic_config()
+    req = _request()
+    ctx = _ctx(request=req, config=cfg)
+    ctx.messages = [
+        {"role": "system", "content": [{"type": "text", "text": "You are helpful."}, {"type": "text", "text": "Be concise."}]},
+        {"role": "user", "content": "hi"},
+    ]
+    ctx.selected_model = "m1"
+    ctx.model_config = cfg.llms["m1"]
+
+    prepare_provider(ctx)
+
+    sys_msg = next(m for m in ctx.provider_messages if m["role"] == "system")
+    blocks = sys_msg["content"]
+    assert "cache_control" not in blocks[0]  # first block unchanged
+    assert blocks[-1]["cache_control"] == {"type": "ephemeral"}  # last block marked
+    assert blocks[-1]["text"] == "Be concise."
+
+
+def test_prepare_provider_anthropic_no_cache_on_empty_system():
+    cfg = _anthropic_config()
+    req = _request()
+    ctx = _ctx(request=req, config=cfg)
+    ctx.messages = [{"role": "user", "content": "hi"}]
+    ctx.selected_model = "m1"
+    ctx.model_config = cfg.llms["m1"]
+
+    prepare_provider(ctx)
+
+    # No system message — provider_messages should just pass through unchanged
+    assert ctx.provider_messages == [{"role": "user", "content": "hi"}]
+
+
+def test_prepare_provider_openai_no_cache_markers():
+    """OpenAI requests must not get cache_control markers."""
+    tools = [{"type": "function", "function": {"name": "foo", "parameters": {"type": "object", "properties": {}}}}]
+    req = _request(tools=tools)
+    ctx = _ctx(request=req)
+    ctx.messages = [
+        {"role": "system", "content": "sys prompt"},
+        {"role": "user", "content": "hi"},
+    ]
+    ctx.selected_model = "m1"
+    ctx.model_config = ctx.config.llms["m1"]
+
+    prepare_provider(ctx)
+
+    sys_msg = next(m for m in ctx.provider_messages if m["role"] == "system")
+    assert isinstance(sys_msg["content"], str)  # not converted to block format
+    assert "cache_control" not in ctx.extra_kwargs["tools"][-1]
+
+
 def test_select_model_skips_router_on_tool_continuation():
     """When skip_router_on_tool_results=True and tool cache has a hit, router is bypassed."""
     req = _request(

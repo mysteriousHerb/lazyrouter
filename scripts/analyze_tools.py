@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """
-Analyze tool definitions from test_proxy logs.
+Analyze tool definitions from logs.
 
 Shows detailed breakdown of tool sizes, parameters, and optimization opportunities.
 """
 
+import argparse
 import json
 import sys
 from pathlib import Path
 from typing import Dict, List, Any
+
+sys.path.insert(0, str(Path(__file__).parent))
+from _utils import add_source_args, resolve_log_file, SOURCE_DIRS
 
 
 def analyze_tool_definitions(log_file: Path) -> Dict[str, Any]:
@@ -113,11 +117,13 @@ def print_tool_analysis(analysis: Dict[str, Any]):
 
 
 def main():
-    log_file = Path("logs/test_proxy/openai_completions_2026-02-18.jsonl")
+    parser = argparse.ArgumentParser(description="Analyze tool definitions from logs.")
+    add_source_args(parser)
+    args = parser.parse_args()
 
-    if not log_file.exists():
-        print(f"Error: Log file not found: {log_file}")
-        sys.exit(1)
+    log_file = resolve_log_file(args.source, getattr(args, "file", None))
+    source = args.source if not getattr(args, "file", None) else "custom"
+    output_dir = SOURCE_DIRS.get(source, log_file.parent)
 
     print(f"Analyzing tool definitions from: {log_file}")
     print()
@@ -126,7 +132,7 @@ def main():
     print_tool_analysis(analysis)
 
     # Export to JSON
-    output_file = Path("logs/test_proxy/tool_analysis.json")
+    output_file = output_dir / "tool_analysis.json"
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(analysis, f, indent=2)
 

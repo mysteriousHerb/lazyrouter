@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """
-Analyze system prompt structure from test_proxy logs.
+Analyze system prompt structure from logs.
 
 Shows section breakdown, sizes, and identifies optimization opportunities.
 """
 
+import argparse
 import json
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
+
+sys.path.insert(0, str(Path(__file__).parent))
+from _utils import add_source_args, resolve_log_file, SOURCE_DIRS
 
 
 def extract_sections(system_prompt: str) -> List[Tuple[str, int, int, int]]:
@@ -174,11 +178,13 @@ def print_analysis(analysis: Dict):
 
 
 def main():
-    log_file = Path("logs/test_proxy/openai_completions_2026-02-18.jsonl")
+    parser = argparse.ArgumentParser(description="Analyze system prompt structure from logs.")
+    add_source_args(parser)
+    args = parser.parse_args()
 
-    if not log_file.exists():
-        print(f"Error: Log file not found: {log_file}")
-        sys.exit(1)
+    log_file = resolve_log_file(args.source, getattr(args, "file", None))
+    source = args.source if not getattr(args, "file", None) else "custom"
+    output_dir = SOURCE_DIRS.get(source, log_file.parent)
 
     print(f"Analyzing system prompt from: {log_file}")
     print()
@@ -192,7 +198,7 @@ def main():
     print_analysis(analysis)
 
     # Export to JSON
-    output_file = Path("logs/test_proxy/system_prompt_analysis.json")
+    output_file = output_dir / "system_prompt_analysis.json"
 
     # Convert tuples to dicts for JSON serialization
     export_data = {

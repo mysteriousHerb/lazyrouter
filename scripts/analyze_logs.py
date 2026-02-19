@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Analyze test_proxy logs to identify compression opportunities.
+Analyze logs to identify compression opportunities.
 
 This script dissects OpenAI-style API calls to understand:
 - System prompt sizes and repetition
@@ -10,11 +10,15 @@ This script dissects OpenAI-style API calls to understand:
 - Potential compression strategies
 """
 
+import argparse
 import json
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
 from collections import defaultdict
+
+sys.path.insert(0, str(Path(__file__).parent))
+from _utils import add_source_args, resolve_log_file, SOURCE_DIRS
 
 
 def analyze_message_sizes(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -231,11 +235,13 @@ def print_analysis(analyses: List[Dict[str, Any]], opportunities: Dict[str, Any]
 
 
 def main():
-    log_file = Path("logs/test_proxy/openai_completions_2026-02-18.jsonl")
+    parser = argparse.ArgumentParser(description="Analyze logs for compression opportunities.")
+    add_source_args(parser)
+    args = parser.parse_args()
 
-    if not log_file.exists():
-        print(f"Error: Log file not found: {log_file}")
-        sys.exit(1)
+    log_file = resolve_log_file(args.source, getattr(args, "file", None))
+    source = args.source if not getattr(args, "file", None) else "custom"
+    output_dir = SOURCE_DIRS.get(source, log_file.parent)
 
     print(f"Analyzing: {log_file}")
     print()
@@ -252,7 +258,7 @@ def main():
     print_analysis(analyses, opportunities)
 
     # Export detailed JSON for further analysis
-    output_file = Path("logs/test_proxy/analysis_output.json")
+    output_file = output_dir / "analysis_output.json"
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump({
             "analyses": analyses,
