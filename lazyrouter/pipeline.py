@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from .models import ChatCompletionRequest
 
 logger = logging.getLogger(__name__)
+_ANTHROPIC_DUMMY_USER_MESSAGE = {"role": "user", "content": "Please continue."}
 
 _PASSTHROUGH_EXCLUDE = {
     "model", "messages", "temperature", "max_tokens", "max_completion_tokens",
@@ -137,6 +138,13 @@ def _prepare_for_model(
                     msg["content"] = content[:-1] + [last_block]
             new_messages.append(msg)
         prep_messages = new_messages
+
+        has_non_system = any(
+            str(msg.get("role", "")).strip().lower() != "system"
+            for msg in prep_messages
+        )
+        if not has_non_system:
+            prep_messages = [*prep_messages, dict(_ANTHROPIC_DUMMY_USER_MESSAGE)]
 
     if request.tool_choice is not None:
         prep_extra["tool_choice"] = request.tool_choice

@@ -391,6 +391,35 @@ def test_prepare_provider_anthropic_no_cache_on_empty_system():
     assert ctx.provider_messages == [{"role": "user", "content": "hi"}]
 
 
+def test_prepare_provider_anthropic_adds_dummy_user_when_messages_empty():
+    cfg = _anthropic_config()
+    req = _request(messages=[])
+    ctx = _ctx(request=req, config=cfg)
+    ctx.messages = []
+    ctx.selected_model = "m1"
+    ctx.model_config = cfg.llms["m1"]
+
+    prepare_provider(ctx)
+
+    assert ctx.provider_messages == [{"role": "user", "content": "Please continue."}]
+
+
+def test_prepare_provider_anthropic_adds_dummy_user_when_only_system():
+    cfg = _anthropic_config()
+    req = _request(messages=[{"role": "system", "content": "sys"}])
+    ctx = _ctx(request=req, config=cfg)
+    ctx.messages = [{"role": "system", "content": "sys"}]
+    ctx.selected_model = "m1"
+    ctx.model_config = cfg.llms["m1"]
+
+    prepare_provider(ctx)
+
+    assert len(ctx.provider_messages) == 2
+    assert ctx.provider_messages[0]["role"] == "system"
+    assert ctx.provider_messages[0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+    assert ctx.provider_messages[1] == {"role": "user", "content": "Please continue."}
+
+
 def test_prepare_provider_openai_no_cache_markers():
     """OpenAI requests must not get cache_control markers."""
     tools = [{"type": "function", "function": {"name": "foo", "parameters": {"type": "object", "properties": {}}}}]
