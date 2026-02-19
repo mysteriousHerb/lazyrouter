@@ -52,7 +52,7 @@ Top 10 largest tools (by definition size):
 ## Total Compression Potential
 
 ### Per Request Savings (with prompt caching)
-```
+```text
 System Prompt:      ~22.5 KB  (90% of 25KB)
 Tool Definitions:   ~28.0 KB  (90% of 31KB)
 ─────────────────────────────────
@@ -60,7 +60,7 @@ TOTAL:              ~50.5 KB per request
 ```
 
 ### Over 8 Requests
-```
+```text
 Without caching:  8 × (25KB + 31KB) = 448 KB
 With caching:     1 × (25KB + 31KB) + 7 × 5.6KB = 95.2 KB
 ─────────────────────────────────

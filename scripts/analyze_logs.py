@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Analyze logs to identify compression opportunities.
 
@@ -14,33 +13,49 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
-from collections import defaultdict
+from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _utils import add_source_args, resolve_log_file, SOURCE_DIRS
+from _utils import SOURCE_DIRS, add_source_args, resolve_log_file
+from analyze_system_prompt import extract_sections
+
+
+def _serialized_size_bytes(value: Any) -> int:
+    """Approximate payload size in bytes using JSON serialization."""
+    return len(json.dumps(value, ensure_ascii=False, default=str).encode("utf-8"))
+
+
+def _content_to_text(content: Any) -> str:
+    """Normalize message content into plain text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: List[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                text = block.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+                else:
+                    parts.append(str(block))
+            else:
+                parts.append(str(block))
+        return "\n".join(parts)
+    if content is None:
+        return ""
+    return str(content)
 
 
 def analyze_message_sizes(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Analyze individual message sizes."""
-    sizes = {
-        "system": [],
-        "user": [],
-        "assistant": [],
-        "tool": []
-    }
+    sizes = {"system": [], "user": [], "assistant": [], "tool": []}
 
     for msg in messages:
         role = msg.get("role", "unknown")
         content = msg.get("content", "")
-
-        if isinstance(content, str):
-            size = len(content)
-        elif isinstance(content, list):
-            size = sum(len(str(item)) for item in content)
-        else:
-            size = len(str(content))
-
+        size = _serialized_size_bytes(content)
         if role in sizes:
             sizes[role].append(size)
 
@@ -49,92 +64,126 @@ def analyze_message_sizes(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def analyze_tools(tools: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Analyze tool definitions."""
-    tool_info = {
-        "count": len(tools),
-        "total_size": 0,
-        "by_tool": {}
-    }
+    tool_info = {"count": len(tools), "total_size": 0, "by_tool": {}}
 
     for tool in tools:
-        tool_json = json.dumps(tool)
-        size = len(tool_json)
+        size = _serialized_size_bytes(tool)
         tool_info["total_size"] += size
 
         name = tool.get("function", {}).get("name", "unknown")
         tool_info["by_tool"][name] = {
             "size": size,
             "has_description": bool(tool.get("function", {}).get("description")),
-            "param_count": len(tool.get("function", {}).get("parameters", {}).get("properties", {}))
+            "param_count": len(
+                tool.get("function", {}).get("parameters", {}).get("properties", {})
+            ),
         }
 
     return tool_info
 
 
-def analyze_system_prompt(system_content: str) -> Dict[str, Any]:
-    """Analyze system prompt structure."""
-    lines = system_content.split("\n")
-
-    sections = {}
-    current_section = "intro"
-    current_lines = []
-
-    for line in lines:
-        if line.startswith("##"):
-            if current_lines:
-                sections[current_section] = "\n".join(current_lines)
-            current_section = line.strip("# ").lower().replace(" ", "_")
-            current_lines = []
-        else:
-            current_lines.append(line)
-
-    if current_lines:
-        sections[current_section] = "\n".join(current_lines)
+def analyze_system_prompt(system_content: Any) -> Dict[str, Any]:
+    """Analyze system prompt structure using shared section extraction."""
+    system_text = _content_to_text(system_content)
+    lines = system_text.split("\n") if system_text else []
+    sections = extract_sections(system_text)
+    section_map = {name: size for name, _start, _line_count, size in sections}
 
     return {
-        "total_size": len(system_content),
+        "total_size": _serialized_size_bytes(system_text),
         "line_count": len(lines),
-        "sections": {k: len(v) for k, v in sections.items()},
-        "section_names": list(sections.keys())
+        "sections": section_map,
+        "section_names": list(section_map.keys()),
     }
 
 
-def analyze_log_entry(entry: Dict[str, Any], entry_num: int) -> Dict[str, Any]:
-    """Analyze a single log entry."""
-    request = entry["request"]
+def analyze_log_entry(entry: Dict[str, Any], entry_num: int) -> Optional[Dict[str, Any]]:
+    """Analyze a single log entry. Returns None for malformed entries."""
+    request = entry.get("request", {})
+    if not isinstance(request, dict):
+        print(
+            f"Warning: skipping line {entry_num}: missing or invalid request object",
+            file=sys.stderr,
+        )
+        return None
+
+    timestamp = entry.get("timestamp")
+    latency_ms = entry.get("latency_ms")
+    if timestamp is None or latency_ms is None:
+        print(
+            f"Warning: skipping line {entry_num}: missing timestamp/latency_ms",
+            file=sys.stderr,
+        )
+        return None
+
     messages = request.get("messages", [])
+    if not isinstance(messages, list):
+        messages = []
     tools = request.get("tools", [])
+    if not isinstance(tools, list):
+        tools = []
 
     # Find system message
-    system_msg = next((m for m in messages if m.get("role") == "system"), None)
+    system_msg = next((m for m in messages if isinstance(m, dict) and m.get("role") == "system"), None)
     system_analysis = None
     if system_msg:
         system_analysis = analyze_system_prompt(system_msg.get("content", ""))
 
-    # Analyze messages
+    # Analyze messages and tools
     message_sizes = analyze_message_sizes(messages)
-
-    # Analyze tools
     tool_analysis = analyze_tools(tools)
 
     # Get usage if available
-    usage = {}
-    if "response" in entry and "usage" in entry["response"]:
-        usage = entry["response"]["usage"]
+    response = entry.get("response", {})
+    if not isinstance(response, dict):
+        response = {}
+    usage = response.get("usage", {})
+    if not isinstance(usage, dict):
+        usage = {}
+
+    try:
+        parsed_latency_ms = float(latency_ms)
+    except (TypeError, ValueError):
+        parsed_latency_ms = 0.0
 
     return {
         "entry_num": entry_num,
-        "timestamp": entry["timestamp"],
-        "latency_ms": entry["latency_ms"],
+        "timestamp": timestamp,
+        "latency_ms": parsed_latency_ms,
         "message_count": len(messages),
         "system_prompt": system_analysis,
         "message_sizes": message_sizes,
         "tools": tool_analysis,
-        "usage": usage
+        "usage": usage,
     }
 
 
 def calculate_compression_opportunities(analyses: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Calculate potential compression opportunities."""
+    if not analyses:
+        return {
+            "system_prompt": {
+                "avg_size_bytes": 0,
+                "sent_per_request": True,
+                "potential_savings": "Cache system prompt (sent in every request)",
+                "estimated_savings_per_request": 0,
+            },
+            "tool_definitions": {
+                "avg_size_bytes": 0,
+                "sent_per_request": True,
+                "potential_savings": "Cache tool definitions (identical across requests)",
+                "estimated_savings_per_request": 0,
+            },
+            "message_history": {
+                "growth_pattern": "N/A",
+                "potential_savings": "Summarize old messages, keep recent context",
+                "note": "History grows linearly with conversation",
+            },
+            "token_usage": {
+                "prompt_token_growth": "N/A",
+                "note": "Prompt tokens grow as conversation continues",
+            },
+        }
 
     # System prompt repetition
     system_sizes = [a["system_prompt"]["total_size"] for a in analyses if a["system_prompt"]]
@@ -146,39 +195,49 @@ def calculate_compression_opportunities(analyses: List[Dict[str, Any]]) -> Dict[
 
     # Message growth
     message_counts = [a["message_count"] for a in analyses]
+    if message_counts:
+        growth_pattern = f"{message_counts[0]} -> {message_counts[-1]} messages"
+    else:
+        growth_pattern = "N/A"
 
     # Token usage growth
     prompt_tokens = [a["usage"].get("prompt_tokens", 0) for a in analyses if a["usage"]]
+    if prompt_tokens:
+        token_growth = f"{prompt_tokens[0]} -> {prompt_tokens[-1]}"
+    else:
+        token_growth = "N/A"
 
-    opportunities = {
+    return {
         "system_prompt": {
             "avg_size_bytes": int(avg_system_size),
             "sent_per_request": True,
             "potential_savings": "Cache system prompt (sent in every request)",
-            "estimated_savings_per_request": int(avg_system_size * 0.9)  # 90% reduction with caching
+            "estimated_savings_per_request": int(avg_system_size * 0.9),
         },
         "tool_definitions": {
             "avg_size_bytes": int(avg_tool_size),
             "sent_per_request": True,
             "potential_savings": "Cache tool definitions (identical across requests)",
-            "estimated_savings_per_request": int(avg_tool_size * 0.9)
+            "estimated_savings_per_request": int(avg_tool_size * 0.9),
         },
         "message_history": {
-            "growth_pattern": f"{message_counts[0]} -> {message_counts[-1]} messages",
+            "growth_pattern": growth_pattern,
             "potential_savings": "Summarize old messages, keep recent context",
-            "note": "History grows linearly with conversation"
+            "note": "History grows linearly with conversation",
         },
         "token_usage": {
-            "prompt_token_growth": f"{prompt_tokens[0]} -> {prompt_tokens[-1]}" if prompt_tokens else "N/A",
-            "note": "Prompt tokens grow as conversation continues"
-        }
+            "prompt_token_growth": token_growth,
+            "note": "Prompt tokens grow as conversation continues",
+        },
     }
 
-    return opportunities
 
-
-def print_analysis(analyses: List[Dict[str, Any]], opportunities: Dict[str, Any]):
+def print_analysis(analyses: List[Dict[str, Any]], opportunities: Dict[str, Any]) -> None:
     """Print formatted analysis."""
+    if not analyses:
+        print("No valid log entries to analyze.")
+        return
+
     print("=" * 80)
     print("LOG ANALYSIS SUMMARY")
     print("=" * 80)
@@ -195,15 +254,24 @@ def print_analysis(analyses: List[Dict[str, Any]], opportunities: Dict[str, Any]
         print(f"  Messages: {a['message_count']}")
         print(f"  Latency: {a['latency_ms']:.0f}ms")
 
-        if a['system_prompt']:
-            print(f"  System prompt: {a['system_prompt']['total_size']:,} bytes, {a['system_prompt']['line_count']} lines")
+        if a["system_prompt"]:
+            print(
+                f"  System prompt: {a['system_prompt']['total_size']:,} bytes, "
+                f"{a['system_prompt']['line_count']} lines"
+            )
             print(f"    Sections: {', '.join(a['system_prompt']['section_names'][:5])}")
 
-        print(f"  Tools: {a['tools']['count']} tools, {a['tools']['total_size']:,} bytes total")
+        print(
+            f"  Tools: {a['tools']['count']} tools, {a['tools']['total_size']:,} bytes total"
+        )
 
-        if a['usage']:
-            u = a['usage']
-            print(f"  Tokens: {u.get('prompt_tokens', 0):,} prompt + {u.get('completion_tokens', 0):,} completion = {u.get('total_tokens', 0):,} total")
+        if a["usage"]:
+            u = a["usage"]
+            print(
+                f"  Tokens: {u.get('prompt_tokens', 0):,} prompt + "
+                f"{u.get('completion_tokens', 0):,} completion = "
+                f"{u.get('total_tokens', 0):,} total"
+            )
 
         print()
 
@@ -224,17 +292,17 @@ def print_analysis(analyses: List[Dict[str, Any]], opportunities: Dict[str, Any]
 
     # Calculate total potential savings
     total_savings = (
-        opportunities["system_prompt"]["estimated_savings_per_request"] +
-        opportunities["tool_definitions"]["estimated_savings_per_request"]
+        opportunities.get("system_prompt", {}).get("estimated_savings_per_request", 0)
+        + opportunities.get("tool_definitions", {}).get("estimated_savings_per_request", 0)
     )
 
     print("=" * 80)
     print(f"TOTAL POTENTIAL SAVINGS: ~{total_savings:,} bytes per request")
-    print(f"  (via prompt caching for system prompt + tool definitions)")
+    print("  (via prompt caching for system prompt + tool definitions)")
     print("=" * 80)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Analyze logs for compression opportunities.")
     add_source_args(parser)
     args = parser.parse_args()
@@ -246,24 +314,32 @@ def main():
     print(f"Analyzing: {log_file}")
     print()
 
-    analyses = []
+    analyses: List[Dict[str, Any]] = []
 
-    with open(log_file, 'r', encoding='utf-8') as f:
+    with open(log_file, "r", encoding="utf-8") as f:
         for i, line in enumerate(f, 1):
-            entry = json.loads(line)
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                entry = json.loads(stripped)
+                if not isinstance(entry, dict):
+                    raise TypeError("entry is not an object")
+            except (json.JSONDecodeError, TypeError) as exc:
+                print(f"Warning: skipping line {i}: {exc}", file=sys.stderr)
+                continue
+
             analysis = analyze_log_entry(entry, i)
-            analyses.append(analysis)
+            if analysis is not None:
+                analyses.append(analysis)
 
     opportunities = calculate_compression_opportunities(analyses)
     print_analysis(analyses, opportunities)
 
     # Export detailed JSON for further analysis
     output_file = output_dir / "analysis_output.json"
-    with open(output_file, 'w', encoding='utf-8') as f:
-        json.dump({
-            "analyses": analyses,
-            "opportunities": opportunities
-        }, f, indent=2)
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump({"analyses": analyses, "opportunities": opportunities}, f, indent=2)
 
     print()
     print(f"Detailed analysis exported to: {output_file}")

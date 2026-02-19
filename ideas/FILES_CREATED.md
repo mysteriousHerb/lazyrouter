@@ -24,10 +24,10 @@
 
 ### Run All Analyses
 ```bash
-python analyze_logs.py
-python analyze_tools.py
-python analyze_system_prompt.py
-python analyze_payload_growth.py
+python scripts/analyze_logs.py
+python scripts/analyze_tools.py
+python scripts/analyze_system_prompt.py
+python scripts/analyze_payload_growth.py
 ```
 
 ### Key Findings

@@ -1,11 +1,9 @@
 """Tests for pipeline step functions."""
 
 import asyncio
-import dataclasses
 
 import pytest
 
-import lazyrouter.pipeline as pipeline_mod
 from lazyrouter.config import (
     Config,
     ContextCompressionConfig,

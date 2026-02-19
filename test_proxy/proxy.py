@@ -27,8 +27,10 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
 from lazyrouter.config import Config, load_config
-from lazyrouter.exchange_logger import configure_log_dir as _configure_exchange_log_dir
-from lazyrouter.exchange_logger import get_log_path, log_exchange
+from lazyrouter.exchange_logger import (
+    configure_log_dir as _configure_exchange_log_dir,
+    log_exchange,
+)
 from lazyrouter.model_normalization import (
     normalize_requested_model as normalize_model_id,
 )

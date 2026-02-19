@@ -9,7 +9,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Any, Dict
 
 sys.path.insert(0, str(Path(__file__).parent))
 from _utils import add_source_args, resolve_log_file, SOURCE_DIRS
@@ -18,7 +18,10 @@ from _utils import add_source_args, resolve_log_file, SOURCE_DIRS
 def analyze_tool_definitions(log_file: Path) -> Dict[str, Any]:
     """Analyze tool definitions from first log entry."""
     with open(log_file, 'r', encoding='utf-8') as f:
-        first_entry = json.loads(f.readline())
+        first_line = f.readline().strip()
+    if not first_line:
+        return {"error": "Log file is empty"}
+    first_entry = json.loads(first_line)
 
     tools = first_entry['request'].get('tools', [])
 
@@ -61,9 +64,17 @@ def print_tool_analysis(analysis: Dict[str, Any]):
     print("=" * 80)
     print()
 
+    if "error" in analysis:
+        print(f"Error: {analysis['error']}")
+        return
+
     print(f"Total tools: {analysis['total_count']}")
     print(f"Total size: {analysis['total_size']:,} bytes")
-    print(f"Average size: {analysis['total_size'] // analysis['total_count']:,} bytes per tool")
+    if analysis["total_count"] > 0:
+        avg_size = analysis["total_size"] // analysis["total_count"]
+        print(f"Average size: {avg_size:,} bytes per tool")
+    else:
+        print("Average size: N/A (no tools)")
     print()
 
     print("TOOLS BY SIZE:")
@@ -79,8 +90,11 @@ def print_tool_analysis(analysis: Dict[str, Any]):
     print("-" * 80)
 
     for i, tool in enumerate(analysis['tools'][:5], 1):
+        pct_of_total = (
+            tool["size"] / analysis["total_size"] * 100 if analysis["total_size"] > 0 else 0.0
+        )
         print(f"\n{i}. {tool['name']}")
-        print(f"   Size: {tool['size']:,} bytes ({tool['size'] / analysis['total_size'] * 100:.1f}% of total)")
+        print(f"   Size: {tool['size']:,} bytes ({pct_of_total:.1f}% of total)")
         print(f"   Parameters: {tool['param_count']}")
         print(f"   Description length: {tool['description_length']} chars")
         if tool['param_count'] <= 10:
@@ -112,7 +126,8 @@ def print_tool_analysis(analysis: Dict[str, Any]):
 
     # Calculate potential savings
     top_5_size = sum(t['size'] for t in analysis['tools'][:5])
-    print(f"Top 5 tools account for: {top_5_size:,} bytes ({top_5_size / analysis['total_size'] * 100:.1f}% of total)")
+    top_5_pct = top_5_size / analysis["total_size"] * 100 if analysis["total_size"] > 0 else 0.0
+    print(f"Top 5 tools account for: {top_5_size:,} bytes ({top_5_pct:.1f}% of total)")
     print(f"Optimizing these 5 tools by 30% would save: {int(top_5_size * 0.3):,} bytes")
 
 

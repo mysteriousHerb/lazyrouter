@@ -79,13 +79,13 @@ def log_exchange(
         "error": error,
     }
     if extra:
-        entry.update(extra)
+        entry["extra"] = sanitize_for_log(extra)
 
     log_path = get_log_path(label)
     try:
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
-    except Exception as log_error:
+    except OSError as log_error:
         logger.warning("Failed to write exchange log (%s): %s", log_path, log_error)
         return
 

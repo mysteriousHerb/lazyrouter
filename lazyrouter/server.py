@@ -1,6 +1,5 @@
 """FastAPI server with OpenAI-compatible endpoints"""
 
-import asyncio
 import json
 import logging
 import time
@@ -252,7 +251,7 @@ async def _logged_stream(
     if streamed_tool_names:
         logger.info(f"[tool-calls] {sorted(streamed_tool_names)}")
 
-    latency_ms = (time.time() - start_time) * 1000 if start_time else 0.0
+    latency_ms = (time.monotonic() - start_time) * 1000 if start_time else 0.0
     log_exchange(
         "server",
         request_id,
@@ -443,7 +442,7 @@ def create_app(
                 parts.append(f"why: {truncated}{suffix}")
             logger.info(f"[routing] {' | '.join(parts)}")
 
-            start_time = time.time()
+            start_time = time.monotonic()
             response = await call_with_fallback(ctx, router, health_checker)
             show_model_prefix = bool(getattr(config.serve, "show_model_prefix", False))
             response_model_prefix = _model_prefix(ctx.selected_model)
@@ -454,7 +453,7 @@ def create_app(
                     media_type="text/event-stream",
                 )
             else:
-                latency_ms = (time.time() - start_time) * 1000
+                latency_ms = (time.monotonic() - start_time) * 1000
                 result = _assemble_non_streaming_response(ctx, response, show_model_prefix)
                 log_exchange(
                     "server",

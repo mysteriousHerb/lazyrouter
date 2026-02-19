@@ -9,10 +9,33 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 sys.path.insert(0, str(Path(__file__).parent))
 from _utils import add_source_args, resolve_log_file, SOURCE_DIRS
+
+
+def _content_to_text(content: Any) -> str:
+    """Normalize message content into plain text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: List[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                text = block.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+                else:
+                    parts.append(str(block))
+            else:
+                parts.append(str(block))
+        return "\n".join(parts)
+    if content is None:
+        return ""
+    return str(content)
 
 
 def extract_sections(system_prompt: str) -> List[Tuple[str, int, int, int]]:
@@ -80,16 +103,19 @@ def categorize_sections(sections: List[Tuple[str, int, int, int]]) -> Dict[str, 
 def analyze_system_prompt(log_file: Path) -> Dict:
     """Analyze system prompt from first log entry."""
     with open(log_file, 'r', encoding='utf-8') as f:
-        first_entry = json.loads(f.readline())
+        first_line = f.readline().strip()
+    if not first_line:
+        return {'error': 'Log file is empty'}
+    first_entry = json.loads(first_line)
 
-    messages = first_entry['request']['messages']
+    messages = first_entry.get('request', {}).get('messages', [])
     system_msg = next((m for m in messages if m.get('role') == 'system'), None)
 
     if not system_msg:
         return {'error': 'No system message found'}
 
-    system_prompt = system_msg['content']
-    lines = system_prompt.split('\n')
+    system_prompt = _content_to_text(system_msg.get('content', ''))
+    lines = system_prompt.split('\n') if system_prompt else []
 
     sections = extract_sections(system_prompt)
     categories = categorize_sections(sections)
@@ -122,8 +148,9 @@ def print_analysis(analysis: Dict):
     print("-" * 80)
 
     sorted_sections = sorted(analysis['sections'], key=lambda x: x[3], reverse=True)
-    for section, start, lines, size in sorted_sections[:15]:
-        pct = size / analysis['total_size'] * 100
+    total_size = analysis.get('total_size', 0)
+    for section, _start, lines, size in sorted_sections[:15]:
+        pct = (size / total_size * 100) if total_size else 0.0
         print(f"{section[:48]:<50} {lines:>6} {size:>8,} {pct:>5.1f}%")
 
     print()
@@ -138,14 +165,14 @@ def print_analysis(analysis: Dict):
             continue
 
         cat_size = sum(s[3] for s in cat_sections)
-        cat_pct = cat_size / analysis['total_size'] * 100
+        cat_pct = (cat_size / total_size * 100) if total_size else 0.0
 
         print(f"\n{cat_name.upper().replace('_', ' ')}:")
         print(f"  Sections: {len(cat_sections)}")
         print(f"  Total size: {cat_size:,} bytes ({cat_pct:.1f}%)")
-        print(f"  Sections:")
+        print("  Sections:")
 
-        for section, start, lines, size in sorted(cat_sections, key=lambda x: x[3], reverse=True):
+        for section, _start, _lines, size in sorted(cat_sections, key=lambda x: x[3], reverse=True):
             print(f"    - {section[:60]:<60} {size:>6,} bytes")
 
     print()
@@ -166,13 +193,18 @@ def print_analysis(analysis: Dict):
     always_dynamic_size = context_size + dynamic_size
 
     print("CACHING STRATEGY:")
-    print(f"  Always cacheable (core + docs): {cacheable_size:,} bytes ({cacheable_size/analysis['total_size']*100:.1f}%)")
-    print(f"  Conditionally include (features): {conditional_size:,} bytes ({conditional_size/analysis['total_size']*100:.1f}%)")
-    print(f"  Always dynamic (context): {always_dynamic_size:,} bytes ({always_dynamic_size/analysis['total_size']*100:.1f}%)")
+    if total_size > 0:
+        print(f"  Always cacheable (core + docs): {cacheable_size:,} bytes ({cacheable_size/total_size*100:.1f}%)")
+        print(f"  Conditionally include (features): {conditional_size:,} bytes ({conditional_size/total_size*100:.1f}%)")
+        print(f"  Always dynamic (context): {always_dynamic_size:,} bytes ({always_dynamic_size/total_size*100:.1f}%)")
+    else:
+        print(f"  Always cacheable (core + docs): {cacheable_size:,} bytes (N/A)")
+        print(f"  Conditionally include (features): {conditional_size:,} bytes (N/A)")
+        print(f"  Always dynamic (context): {always_dynamic_size:,} bytes (N/A)")
     print()
 
     print("POTENTIAL SAVINGS:")
-    print(f"  With full prompt caching: ~{int(analysis['total_size'] * 0.9):,} bytes per request (90%)")
+    print(f"  With full prompt caching: ~{int(total_size * 0.9):,} bytes per request (90%)")
     print(f"  With split caching (static only): ~{int(cacheable_size * 0.9):,} bytes per request")
     print(f"  With conditional assembly: ~{int(conditional_size * 0.5):,} bytes per request (50% of features)")
 

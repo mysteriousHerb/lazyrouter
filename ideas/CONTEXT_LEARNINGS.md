@@ -14,7 +14,7 @@ Analyzed OpenAI-style API calls from test_proxy logs to identify compression opp
 - Total waste: **56KB of identical data per request**
 
 **The Data:**
-```
+```text
 Request 1: 56KB (system + tools) + 2.9KB (history) = 58.5KB
 Request 2: 56KB (system + tools) + 4.2KB (history) = 60.4KB
 Request 3: 56KB (system + tools) + 6.5KB (history) = 62.6KB
@@ -65,14 +65,14 @@ Average tool size: 1,193 bytes
 - Google: 75% discount (requires context caching API)
 
 **Expected Savings:**
-```
+```text
 Without caching: 8 × 56KB = 448KB
 With caching:    56KB (first) + 7 × 5.6KB = 95KB
 Savings:         353KB (79% reduction)
 ```
 
 **Cost Savings (Anthropic example):**
-```
+```text
 Without: $1.34 per 8 requests
 With:    $0.33 per 8 requests
 Savings: $1.01 (75% reduction)

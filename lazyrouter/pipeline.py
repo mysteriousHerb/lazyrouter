@@ -135,7 +135,7 @@ def _prepare_for_model(
                     last_block = dict(content[-1])
                     last_block["cache_control"] = {"type": "ephemeral"}
                     msg = dict(msg)
-                    msg["content"] = content[:-1] + [last_block]
+                    msg["content"] = [*content[:-1], last_block]
             new_messages.append(msg)
         prep_messages = new_messages
 
