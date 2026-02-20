@@ -270,6 +270,76 @@ async def _wait_for_healthy_models(ctx: RequestContext, health_checker: Any) -> 
     return False
 
 
+def _model_elo_score(model_config: "ModelConfig") -> int:
+    """Return a single quality score from coding/writing ELO signals."""
+    return max(model_config.coding_elo or 0, model_config.writing_elo or 0)
+
+
+async def _handle_cache_aware_routing(
+    ctx: RequestContext,
+    health_checker: Any,
+    router: Any,
+) -> Optional[str]:
+    """Try cache-aware sticky routing. Returns selected model or None."""
+    cache_entry = cache_tracker_get(ctx.session_key)
+    if not cache_entry:
+        return None
+
+    cached_model, cache_age_seconds = cache_entry
+    cached_model_config = ctx.config.llms.get(cached_model)
+    if not (cached_model_config and cached_model_config.cache_ttl):
+        return None
+
+    buffer_seconds = ctx.config.router.cache_buffer_seconds
+    if not is_cache_hot(cache_age_seconds, cached_model_config.cache_ttl, buffer_seconds):
+        logger.info(
+            "[cache-aware] cache expired for %s (age=%.1fs, ttl=%dmin), routing freely",
+            cached_model,
+            cache_age_seconds,
+            cached_model_config.cache_ttl,
+        )
+        return None
+
+    if cached_model in health_checker.unhealthy_models:
+        logger.warning(
+            "[cache-aware] cached model unhealthy, rerouting: %s (cache_age=%.1fs)",
+            cached_model,
+            cache_age_seconds,
+        )
+        return None
+
+    routing_result = await router.route(
+        ctx.messages,
+        exclude_models=health_checker.unhealthy_models or None,
+    )
+    routed_model = routing_result.model
+    routed_config = ctx.config.llms.get(routed_model)
+
+    cached_score = _model_elo_score(cached_model_config)
+    routed_score = _model_elo_score(routed_config) if routed_config else 0
+
+    if routed_score > cached_score:
+        ctx.routing_result = routing_result
+        ctx.routing_response = routing_result.raw_response
+        ctx.routing_reasoning = routing_result.reasoning
+        logger.info(
+            "[cache-aware] upgrading from %s to %s (cache_age=%.1fs, hot cache preserved)",
+            cached_model,
+            routed_model,
+            cache_age_seconds,
+        )
+        return routed_model
+
+    ctx.router_skipped_reason = f"hot cache (age={int(cache_age_seconds)}s)"
+    logger.info(
+        "[cache-aware] sticking with %s (cache_age=%.1fs, ttl=%dmin)",
+        cached_model,
+        cache_age_seconds,
+        cached_model_config.cache_ttl,
+    )
+    return cached_model
+
+
 async def select_model(ctx: RequestContext, health_checker: Any, router: Any) -> None:
     """Select model and populate ctx.selected_model, model_config, routing_result, etc."""
     await health_checker.note_request_and_maybe_run_cold_boot_check()
@@ -304,66 +374,8 @@ async def select_model(ctx: RequestContext, health_checker: Any, router: Any) ->
                     ctx.router_skipped_reason = f"cached {matched_count}/{total_count}"
                     logger.debug("[router-skip] using cached model: %s", selected_model)
 
-        # Cache-aware routing: check if we have a hot cache
         if selected_model is None:
-            cache_entry = cache_tracker_get(ctx.session_key)
-            if cache_entry:
-                cached_model, cache_age_seconds = cache_entry
-                cached_model_config = ctx.config.llms.get(cached_model)
-
-                if cached_model_config and cached_model_config.cache_ttl:
-                    buffer_seconds = ctx.config.router.cache_buffer_seconds
-                    if is_cache_hot(cache_age_seconds, cached_model_config.cache_ttl, buffer_seconds):
-                        # Cache is hot - check if we should stick with it
-                        if cached_model in health_checker.unhealthy_models:
-                            logger.warning(
-                                "[cache-aware] cached model unhealthy, rerouting: %s (cache_age=%.1fs)",
-                                cached_model,
-                                cache_age_seconds,
-                            )
-                        else:
-                            # Route to find best model, but constrain to same-or-better
-                            routing_result = await router.route(
-                                ctx.messages,
-                                exclude_models=health_checker.unhealthy_models or None,
-                            )
-                            routed_model = routing_result.model
-                            routed_config = ctx.config.llms.get(routed_model)
-
-                            # Compare ELO ratings to decide if we should upgrade
-                            cached_elo = (cached_model_config.coding_elo or 0, cached_model_config.writing_elo or 0)
-                            routed_elo = (routed_config.coding_elo or 0, routed_config.writing_elo or 0) if routed_config else (0, 0)
-
-                            # Only switch if routed model is clearly better (higher ELO)
-                            if routed_elo > cached_elo:
-                                selected_model = routed_model
-                                ctx.routing_result = routing_result
-                                ctx.routing_response = routing_result.raw_response
-                                ctx.routing_reasoning = routing_result.reasoning
-                                logger.info(
-                                    "[cache-aware] upgrading from %s to %s (cache_age=%.1fs, hot cache preserved)",
-                                    cached_model,
-                                    routed_model,
-                                    cache_age_seconds,
-                                )
-                            else:
-                                # Stick with cached model to preserve hot cache
-                                selected_model = cached_model
-                                ctx.router_skipped_reason = f"hot cache (age={int(cache_age_seconds)}s)"
-                                logger.info(
-                                    "[cache-aware] sticking with %s (cache_age=%.1fs, ttl=%dmin)",
-                                    cached_model,
-                                    cache_age_seconds,
-                                    cached_model_config.cache_ttl,
-                                )
-                    else:
-                        # Cache expired - route freely
-                        logger.info(
-                            "[cache-aware] cache expired for %s (age=%.1fs, ttl=%dmin), routing freely",
-                            cached_model,
-                            cache_age_seconds,
-                            cached_model_config.cache_ttl,
-                        )
+            selected_model = await _handle_cache_aware_routing(ctx, health_checker, router)
 
         if selected_model is None:
             routing_result = await router.route(

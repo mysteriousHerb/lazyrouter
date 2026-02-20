@@ -1,10 +1,10 @@
 """Tests for cache-aware routing logic"""
 
 import pytest
-import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from lazyrouter.cache_tracker import (
+    _cache_timestamps,
     cache_tracker_set,
     cache_tracker_get,
     cache_tracker_clear,
@@ -62,6 +62,14 @@ def mock_config():
     )
 
 
+@pytest.fixture(autouse=True)
+def clean_cache_tracker_state():
+    """Ensure cache tracker state is clean between tests."""
+    _cache_timestamps.clear()
+    yield
+    _cache_timestamps.clear()
+
+
 def test_cache_tracker_basic():
     """Test basic cache tracker operations"""
     session_key = "test-session-1"
@@ -106,6 +114,10 @@ def test_is_cache_hot():
     # Test with custom 15-second buffer
     assert is_cache_hot(284, 5, buffer_seconds=15) is True
     assert is_cache_hot(285, 5, buffer_seconds=15) is False
+
+    # Misconfigured buffer >= ttl should be treated as cold
+    assert is_cache_hot(0, 1, buffer_seconds=60) is False
+    assert is_cache_hot(0, 1, buffer_seconds=120) is False
 
 
 @pytest.mark.asyncio
@@ -196,27 +208,26 @@ async def test_cache_aware_routing_expired_cache_routes_freely(mock_config):
     ctx.resolved_model = "auto"
 
     # Set up cache with haiku, then simulate 5 minutes passing
-    cache_tracker_set(ctx.session_key, "haiku")
-    # Manually adjust timestamp to simulate expired cache
-    from lazyrouter.cache_tracker import _cache_timestamps
-    model_name, _ = _cache_timestamps[ctx.session_key]
-    _cache_timestamps[ctx.session_key] = (model_name, time.monotonic() - 300)  # 5 min ago
+    with patch("lazyrouter.cache_tracker.time.monotonic") as mock_monotonic:
+        mock_monotonic.return_value = 1000.0
+        cache_tracker_set(ctx.session_key, "haiku")
+        mock_monotonic.return_value = 1300.0
 
-    # Mock health checker
-    health_checker = MagicMock()
-    health_checker.healthy_models = {"haiku", "sonnet", "opus"}
-    health_checker.unhealthy_models = set()
-    health_checker.note_request_and_maybe_run_cold_boot_check = AsyncMock()
+        # Mock health checker
+        health_checker = MagicMock()
+        health_checker.healthy_models = {"haiku", "sonnet", "opus"}
+        health_checker.unhealthy_models = set()
+        health_checker.note_request_and_maybe_run_cold_boot_check = AsyncMock()
 
-    # Mock router to suggest sonnet
-    router = MagicMock()
-    routing_result = MagicMock()
-    routing_result.model = "sonnet"
-    routing_result.reasoning = "Good balance"
-    routing_result.raw_response = '{"model": "sonnet", "reasoning": "Good balance"}'
-    router.route = AsyncMock(return_value=routing_result)
+        # Mock router to suggest sonnet
+        router = MagicMock()
+        routing_result = MagicMock()
+        routing_result.model = "sonnet"
+        routing_result.reasoning = "Good balance"
+        routing_result.raw_response = '{"model": "sonnet", "reasoning": "Good balance"}'
+        router.route = AsyncMock(return_value=routing_result)
 
-    await select_model(ctx, health_checker, router)
+        await select_model(ctx, health_checker, router)
 
     # Should route freely to sonnet since cache expired
     assert ctx.selected_model == "sonnet"

@@ -65,6 +65,10 @@ llms:
 - Example: With 5min TTL and 30s buffer, cache is "hot" for first 4:30
 - Adjust based on your routing latency and cache hit requirements
 
+**Deployment Note:**
+- Current cache tracking is in-memory and process-local.
+- With multi-worker deployments, stickiness may not be preserved across workers unless requests are session-sticky at the load balancer.
+
 ## Benefits
 
 1. **Maximizes cache hits**: Avoids unnecessary model switches that would bust cache
@@ -111,7 +115,7 @@ llms:
 - `cache_tracker_set(session_key, model_name)`: Record cache creation
 - `cache_tracker_get(session_key)`: Get cached model and age
 - `cache_tracker_clear(session_key)`: Clear cache tracking
-- `is_cache_hot(age_seconds, cache_ttl_minutes)`: Check if cache is valid
+- `is_cache_hot(age_seconds, cache_ttl_minutes, buffer_seconds=30)`: Check if cache is valid with a safety buffer
 
 ### Testing
 - Unit tests in `tests/test_cache_aware_routing.py`
@@ -130,7 +134,7 @@ Cache-aware routing decisions are logged:
 ## Future Enhancements
 
 Potential improvements:
-- Per-model cache TTL configuration
+- Shared cache backend for multi-worker consistency (e.g., Redis)
 - Cache hit rate metrics
 - Adaptive cache TTL based on usage patterns
 - Multi-tier cache strategies
