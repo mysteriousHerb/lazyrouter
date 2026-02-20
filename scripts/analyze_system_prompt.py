@@ -54,7 +54,7 @@ def extract_sections(system_prompt: str) -> List[Tuple[str, int, int, int]]:
             if current_section:
                 line_count = i - current_start
                 section_text = '\n'.join(lines[current_start:i])
-                size = len(section_text)
+                size = len(section_text.encode('utf-8'))
                 sections.append((current_section, current_start, line_count, size))
 
             # Clean section name (remove emojis)
@@ -65,7 +65,7 @@ def extract_sections(system_prompt: str) -> List[Tuple[str, int, int, int]]:
     if current_section:
         line_count = len(lines) - current_start
         section_text = '\n'.join(lines[current_start:])
-        size = len(section_text)
+        size = len(section_text.encode('utf-8'))
         sections.append((current_section, current_start, line_count, size))
 
     return sections
