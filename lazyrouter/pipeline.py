@@ -120,25 +120,9 @@ def _prepare_for_model(
         else:
             prep_extra["tools"] = tools
 
-    # For Anthropic: mark system message as cacheable.
+    # For Anthropic: keep messages as-is, but ensure at least one
+    # non-system message for LiteLLM/Anthropic compatibility.
     if api_style == "anthropic":
-        new_messages = []
-        for msg in prep_messages:
-            if msg.get("role") == "system":
-                content = msg.get("content", "")
-                if isinstance(content, str) and content:
-                    msg = dict(msg)
-                    msg["content"] = [
-                        {"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}
-                    ]
-                elif isinstance(content, list) and content:
-                    last_block = dict(content[-1])
-                    last_block["cache_control"] = {"type": "ephemeral"}
-                    msg = dict(msg)
-                    msg["content"] = [*content[:-1], last_block]
-            new_messages.append(msg)
-        prep_messages = new_messages
-
         has_non_system = any(
             str(msg.get("role", "")).strip().lower() != "system"
             for msg in prep_messages

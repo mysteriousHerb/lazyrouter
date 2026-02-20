@@ -316,7 +316,7 @@ def _anthropic_config() -> Config:
     )
 
 
-def test_prepare_provider_anthropic_adds_cache_to_system():
+def test_prepare_provider_anthropic_keeps_system_message_unchanged():
     cfg = _anthropic_config()
     tools = [{"type": "function", "function": {"name": "read", "parameters": {"type": "object", "properties": {}}}}]
     req = _request(tools=tools)
@@ -331,9 +331,8 @@ def test_prepare_provider_anthropic_adds_cache_to_system():
     prepare_provider(ctx)
 
     sys_msg = next(m for m in ctx.provider_messages if m["role"] == "system")
-    assert isinstance(sys_msg["content"], list)
-    assert sys_msg["content"][0]["cache_control"] == {"type": "ephemeral"}
-    assert sys_msg["content"][0]["text"] == "You are a helpful assistant."
+    assert isinstance(sys_msg["content"], str)
+    assert sys_msg["content"] == "You are a helpful assistant."
 
 
 def test_prepare_provider_anthropic_does_not_add_cache_to_tools():
@@ -355,7 +354,7 @@ def test_prepare_provider_anthropic_does_not_add_cache_to_tools():
     assert "cache_control" not in result_tools[-1]
 
 
-def test_prepare_provider_anthropic_adds_cache_to_system_block_list():
+def test_prepare_provider_anthropic_keeps_system_block_list_unchanged():
     cfg = _anthropic_config()
     req = _request()
     ctx = _ctx(request=req, config=cfg)
@@ -370,8 +369,8 @@ def test_prepare_provider_anthropic_adds_cache_to_system_block_list():
 
     sys_msg = next(m for m in ctx.provider_messages if m["role"] == "system")
     blocks = sys_msg["content"]
-    assert "cache_control" not in blocks[0]  # first block unchanged
-    assert blocks[-1]["cache_control"] == {"type": "ephemeral"}  # last block marked
+    assert "cache_control" not in blocks[0]
+    assert "cache_control" not in blocks[-1]
     assert blocks[-1]["text"] == "Be concise."
 
 
@@ -414,7 +413,7 @@ def test_prepare_provider_anthropic_adds_dummy_user_when_only_system():
 
     assert len(ctx.provider_messages) == 2
     assert ctx.provider_messages[0]["role"] == "system"
-    assert ctx.provider_messages[0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+    assert ctx.provider_messages[0]["content"] == "sys"
     assert ctx.provider_messages[1] == {"role": "user", "content": "Please continue."}
 
 
