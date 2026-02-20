@@ -71,6 +71,7 @@ class ModelConfig(BaseModel):
     output_price: Optional[float] = None  # Price per 1M output tokens
     coding_elo: Optional[int] = None  # LMSys Arena Elo rating for coding
     writing_elo: Optional[int] = None  # LMSys Arena Elo rating for writing
+    cache_ttl: Optional[int] = None  # Cache TTL in minutes (e.g., 5 for Claude prompt caching)
 
 
 class ContextCompressionConfig(BaseModel):
