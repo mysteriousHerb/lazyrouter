@@ -7,6 +7,7 @@ Shows section breakdown, sizes, and identifies optimization opportunities.
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -57,7 +58,7 @@ def extract_sections(system_prompt: str) -> List[Tuple[str, int, int, int]]:
                 sections.append((current_section, current_start, line_count, size))
 
             # Clean section name (remove emojis)
-            current_section = line.strip().encode('ascii', 'ignore').decode('ascii')
+            current_section = re.sub(r'[\U00010000-\U0010ffff]|\u200d|[\u2600-\u27BF]', '', line.strip()).strip()
             current_start = i
 
     # Add last section
@@ -106,7 +107,10 @@ def analyze_system_prompt(log_file: Path) -> Dict:
         first_line = f.readline().strip()
     if not first_line:
         return {'error': 'Log file is empty'}
-    first_entry = json.loads(first_line)
+    try:
+        first_entry = json.loads(first_line)
+    except json.JSONDecodeError as exc:
+        return {'error': 'Invalid JSON in first log entry', 'details': str(exc)}
 
     messages = first_entry.get('request', {}).get('messages', [])
     system_msg = next((m for m in messages if m.get('role') == 'system'), None)

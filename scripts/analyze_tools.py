@@ -21,7 +21,10 @@ def analyze_tool_definitions(log_file: Path) -> Dict[str, Any]:
         first_line = f.readline().strip()
     if not first_line:
         return {"error": "Log file is empty"}
-    first_entry = json.loads(first_line)
+    try:
+        first_entry = json.loads(first_line)
+    except json.JSONDecodeError as exc:
+        return {"error": f"First log entry is not valid JSON: {exc}"}
 
     tools = first_entry['request'].get('tools', [])
 
