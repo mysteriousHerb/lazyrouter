@@ -1,11 +1,9 @@
 """Tests for pipeline step functions."""
 
 import asyncio
-import dataclasses
 
 import pytest
 
-import lazyrouter.pipeline as pipeline_mod
 from lazyrouter.config import (
     Config,
     ContextCompressionConfig,
@@ -302,6 +300,140 @@ def test_select_model_raises_400_for_unknown_model():
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(select_model(ctx, hc, _FakeRouter("m1")))
     assert exc_info.value.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Anthropic prompt caching
+# ---------------------------------------------------------------------------
+
+def _anthropic_config() -> Config:
+    return Config(
+        serve=ServeConfig(),
+        router=RouterConfig(provider="p1", model="m1"),
+        providers={"p1": ProviderConfig(api_key="k", api_style="anthropic")},
+        llms={"m1": ModelConfig(provider="p1", model="claude-sonnet", description="claude")},
+        health_check=HealthCheckConfig(enabled=False),
+    )
+
+
+def test_prepare_provider_anthropic_keeps_system_message_unchanged():
+    cfg = _anthropic_config()
+    tools = [{"type": "function", "function": {"name": "read", "parameters": {"type": "object", "properties": {}}}}]
+    req = _request(tools=tools)
+    ctx = _ctx(request=req, config=cfg)
+    ctx.messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "hi"},
+    ]
+    ctx.selected_model = "m1"
+    ctx.model_config = cfg.llms["m1"]
+
+    prepare_provider(ctx)
+
+    sys_msg = next(m for m in ctx.provider_messages if m["role"] == "system")
+    assert isinstance(sys_msg["content"], str)
+    assert sys_msg["content"] == "You are a helpful assistant."
+
+
+def test_prepare_provider_anthropic_does_not_add_cache_to_tools():
+    cfg = _anthropic_config()
+    tools = [
+        {"type": "function", "function": {"name": "read", "parameters": {"type": "object", "properties": {}}}},
+        {"type": "function", "function": {"name": "write", "parameters": {"type": "object", "properties": {}}}},
+    ]
+    req = _request(tools=tools)
+    ctx = _ctx(request=req, config=cfg)
+    ctx.messages = [{"role": "user", "content": "hi"}]
+    ctx.selected_model = "m1"
+    ctx.model_config = cfg.llms["m1"]
+
+    prepare_provider(ctx)
+
+    result_tools = ctx.extra_kwargs["tools"]
+    assert "cache_control" not in result_tools[0]
+    assert "cache_control" not in result_tools[-1]
+
+
+def test_prepare_provider_anthropic_keeps_system_block_list_unchanged():
+    cfg = _anthropic_config()
+    req = _request()
+    ctx = _ctx(request=req, config=cfg)
+    ctx.messages = [
+        {"role": "system", "content": [{"type": "text", "text": "You are helpful."}, {"type": "text", "text": "Be concise."}]},
+        {"role": "user", "content": "hi"},
+    ]
+    ctx.selected_model = "m1"
+    ctx.model_config = cfg.llms["m1"]
+
+    prepare_provider(ctx)
+
+    sys_msg = next(m for m in ctx.provider_messages if m["role"] == "system")
+    blocks = sys_msg["content"]
+    assert "cache_control" not in blocks[0]
+    assert "cache_control" not in blocks[-1]
+    assert blocks[-1]["text"] == "Be concise."
+
+
+def test_prepare_provider_anthropic_no_cache_on_empty_system():
+    cfg = _anthropic_config()
+    req = _request()
+    ctx = _ctx(request=req, config=cfg)
+    ctx.messages = [{"role": "user", "content": "hi"}]
+    ctx.selected_model = "m1"
+    ctx.model_config = cfg.llms["m1"]
+
+    prepare_provider(ctx)
+
+    # No system message — provider_messages should just pass through unchanged
+    assert ctx.provider_messages == [{"role": "user", "content": "hi"}]
+
+
+def test_prepare_provider_anthropic_adds_dummy_user_when_messages_empty():
+    cfg = _anthropic_config()
+    req = _request(messages=[])
+    ctx = _ctx(request=req, config=cfg)
+    ctx.messages = []
+    ctx.selected_model = "m1"
+    ctx.model_config = cfg.llms["m1"]
+
+    prepare_provider(ctx)
+
+    assert ctx.provider_messages == [{"role": "user", "content": "Please continue."}]
+
+
+def test_prepare_provider_anthropic_adds_dummy_user_when_only_system():
+    cfg = _anthropic_config()
+    req = _request(messages=[{"role": "system", "content": "sys"}])
+    ctx = _ctx(request=req, config=cfg)
+    ctx.messages = [{"role": "system", "content": "sys"}]
+    ctx.selected_model = "m1"
+    ctx.model_config = cfg.llms["m1"]
+
+    prepare_provider(ctx)
+
+    assert len(ctx.provider_messages) == 2
+    assert ctx.provider_messages[0]["role"] == "system"
+    assert ctx.provider_messages[0]["content"] == "sys"
+    assert ctx.provider_messages[1] == {"role": "user", "content": "Please continue."}
+
+
+def test_prepare_provider_openai_no_cache_markers():
+    """OpenAI requests must not get cache_control markers."""
+    tools = [{"type": "function", "function": {"name": "foo", "parameters": {"type": "object", "properties": {}}}}]
+    req = _request(tools=tools)
+    ctx = _ctx(request=req)
+    ctx.messages = [
+        {"role": "system", "content": "sys prompt"},
+        {"role": "user", "content": "hi"},
+    ]
+    ctx.selected_model = "m1"
+    ctx.model_config = ctx.config.llms["m1"]
+
+    prepare_provider(ctx)
+
+    sys_msg = next(m for m in ctx.provider_messages if m["role"] == "system")
+    assert isinstance(sys_msg["content"], str)  # not converted to block format
+    assert "cache_control" not in ctx.extra_kwargs["tools"][-1]
 
 
 def test_select_model_skips_router_on_tool_continuation():

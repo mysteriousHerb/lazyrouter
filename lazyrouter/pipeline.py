@@ -45,6 +45,8 @@ if TYPE_CHECKING:
     from .models import ChatCompletionRequest
 
 logger = logging.getLogger(__name__)
+_ANTHROPIC_DUMMY_USER_MESSAGE = {"role": "user", "content": "Please continue."}
+_MESSAGE_ID_RE = re.compile(r'("message_id"\s*:\s*)"[^"]*"')
 
 _PASSTHROUGH_EXCLUDE = {
     "model", "messages", "temperature", "max_tokens", "max_completion_tokens",
@@ -118,6 +120,28 @@ def _prepare_for_model(
             prep_extra["tools"] = sanitize_tool_schema_for_gemini(tools, output_format="openai")
         else:
             prep_extra["tools"] = tools
+
+    # For Anthropic: stabilise message_id in system prompt so it doesn't bust the cache,
+    # then ensure at least one non-system message for LiteLLM/Anthropic compatibility.
+    if api_style == "anthropic":
+        new_messages = []
+        for msg in prep_messages:
+            if msg.get("role") == "system":
+                content = msg.get("content", "")
+                if isinstance(content, str) and content:
+                    stabilised = _MESSAGE_ID_RE.sub(r'\1"0"', content)
+                    if stabilised != content:
+                        msg = dict(msg)
+                        msg["content"] = stabilised
+            new_messages.append(msg)
+        prep_messages = new_messages
+
+        has_non_system = any(
+            str(msg.get("role", "")).strip().lower() != "system"
+            for msg in prep_messages
+        )
+        if not has_non_system:
+            prep_messages = [*prep_messages, dict(_ANTHROPIC_DUMMY_USER_MESSAGE)]
 
     if request.tool_choice is not None:
         prep_extra["tool_choice"] = request.tool_choice
