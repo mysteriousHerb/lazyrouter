@@ -55,13 +55,16 @@ Primary local checks: `GET /health`, `GET /v1/models`, `POST /v1/chat/completion
 ## Cache-Aware Routing (Prompt Cache Stickiness)
 - Models with `cache_ttl` configured (e.g., Claude with 5-minute prompt caching) benefit from cache-aware routing.
 - When a cacheable model is used, the system tracks cache creation time per session.
-- While cache is "hot" (< TTL - 15sec buffer), the router will:
+- While cache is "hot" (< TTL - buffer), the router will:
   - Stick to the cached model if routing suggests same or worse model (preserves cache hits)
   - Upgrade to a better model if routing suggests significant improvement (based on ELO ratings)
   - Never downgrade while cache is valid (avoids cache misses)
-- Once cache expires (>= TTL - 15sec), routing proceeds freely without constraints.
+- Once cache expires (>= TTL - buffer), routing proceeds freely without constraints.
 - Cache tracking is cleared on session reset (`/new` or `/reset` commands).
-- Example config: `cache_ttl: 5` for Claude models with 5-minute prompt caching.
+- Configuration:
+  - `cache_ttl: 5` on model config for 5-minute prompt caching
+  - `cache_buffer_seconds: 30` in router config for safety buffer (default 30s)
+  - Example: With 5min TTL and 30s buffer, cache is hot for first 4:30
 
 ## Agent Workflow
 - After each completed coding task, record progress and key findings in the Notion tracker using the `notion` skill.

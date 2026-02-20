@@ -40,6 +40,7 @@ class RouterConfig(BaseModel):
         None  # Number of recent messages to include (None = last user message only)
     )
     prompt: Optional[str] = None  # Custom routing prompt (overrides default)
+    cache_buffer_seconds: int = 30  # Safety buffer before cache TTL expires (default 30s)
 
     @model_validator(mode="after")
     def validate_prompt_placeholders(self) -> "RouterConfig":

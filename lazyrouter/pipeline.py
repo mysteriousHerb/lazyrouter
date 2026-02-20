@@ -312,7 +312,8 @@ async def select_model(ctx: RequestContext, health_checker: Any, router: Any) ->
                 cached_model_config = ctx.config.llms.get(cached_model)
 
                 if cached_model_config and cached_model_config.cache_ttl:
-                    if is_cache_hot(cache_age_seconds, cached_model_config.cache_ttl):
+                    buffer_seconds = ctx.config.router.cache_buffer_seconds
+                    if is_cache_hot(cache_age_seconds, cached_model_config.cache_ttl, buffer_seconds):
                         # Cache is hot - check if we should stick with it
                         if cached_model in health_checker.unhealthy_models:
                             logger.warning(

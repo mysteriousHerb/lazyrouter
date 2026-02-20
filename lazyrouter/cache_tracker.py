@@ -66,19 +66,19 @@ def cache_tracker_clear(session_key: str) -> Optional[str]:
     return None
 
 
-def is_cache_hot(age_seconds: float, cache_ttl_minutes: int) -> bool:
+def is_cache_hot(age_seconds: float, cache_ttl_minutes: int, buffer_seconds: int = 30) -> bool:
     """Check if cache is still hot (worth preserving).
 
-    We use a 15-second buffer before TTL to account for routing latency.
-    For example, with 5min TTL, cache is "hot" for the first 4:45.
+    We use a configurable buffer before TTL to account for routing latency.
+    For example, with 5min TTL and 30s buffer, cache is "hot" for the first 4:30.
 
     Args:
         age_seconds: Age of cache in seconds
         cache_ttl_minutes: Cache TTL in minutes
+        buffer_seconds: Safety buffer in seconds (default 30)
 
     Returns:
         True if cache is hot and should be preserved
     """
-    buffer_seconds = 15
     hot_threshold_seconds = (cache_ttl_minutes * 60) - buffer_seconds
     return age_seconds < hot_threshold_seconds

@@ -87,20 +87,25 @@ def test_cache_tracker_basic():
 
 def test_is_cache_hot():
     """Test cache hotness detection"""
+    # Test with default 30-second buffer
     # Fresh cache (30 seconds old, 5 min TTL) - should be hot
-    assert is_cache_hot(30, 5) is True
+    assert is_cache_hot(30, 5, buffer_seconds=30) is True
 
     # 4 minute old cache (5 min TTL) - should be hot
-    assert is_cache_hot(240, 5) is True
+    assert is_cache_hot(240, 5, buffer_seconds=30) is True
 
-    # 4:44 old cache (5 min TTL) - should be hot (just under 15sec buffer)
-    assert is_cache_hot(284, 5) is True
+    # 4:29 old cache (5 min TTL) - should be hot (just under 30sec buffer)
+    assert is_cache_hot(269, 5, buffer_seconds=30) is True
 
-    # 4:45 old cache (5 min TTL) - should be cold (at 15sec buffer threshold)
-    assert is_cache_hot(285, 5) is False
+    # 4:30 old cache (5 min TTL) - should be cold (at 30sec buffer threshold)
+    assert is_cache_hot(270, 5, buffer_seconds=30) is False
 
     # 5 minute old cache (5 min TTL) - should be cold
-    assert is_cache_hot(300, 5) is False
+    assert is_cache_hot(300, 5, buffer_seconds=30) is False
+
+    # Test with custom 15-second buffer
+    assert is_cache_hot(284, 5, buffer_seconds=15) is True
+    assert is_cache_hot(285, 5, buffer_seconds=15) is False
 
 
 @pytest.mark.asyncio

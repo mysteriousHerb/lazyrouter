@@ -17,8 +17,9 @@ When a cacheable model (one with `cache_ttl` configured) is selected, the system
 
 During model selection for subsequent requests in the same session:
 
-1. **Check cache status**: Determine if cache is "hot" (< TTL - 15sec buffer)
-   - Example: With 5min TTL, cache is hot for first 4:45
+1. **Check cache status**: Determine if cache is "hot" (< TTL - buffer)
+   - Example: With 5min TTL and 30s buffer, cache is hot for first 4:30
+   - Buffer is configurable via `cache_buffer_seconds` in router config
 
 2. **If cache is hot**:
    - Run normal routing to find best model
@@ -36,13 +37,18 @@ During model selection for subsequent requests in the same session:
 Cache tracking is cleared when:
 - User sends `/new` or `/reset` command
 - Session explicitly resets
-- Cache naturally expires (>= TTL - 15sec)
+- Cache naturally expires (>= TTL - buffer)
 
 ## Configuration
 
-Add `cache_ttl` to model config in `config.yaml`:
+Add `cache_ttl` to model config and `cache_buffer_seconds` to router config in `config.yaml`:
 
 ```yaml
+router:
+  provider: anthropic
+  model: "claude-sonnet-4-5"
+  cache_buffer_seconds: 30  # Safety buffer before cache expires (default 30s)
+
 llms:
   claude-sonnet-4-5:
     provider: anthropic
@@ -52,6 +58,12 @@ llms:
     writing_elo: 1450
     cache_ttl: 5  # Cache TTL in minutes
 ```
+
+**Buffer Configuration:**
+- `cache_buffer_seconds`: Safety window before cache TTL expires (default: 30 seconds)
+- Accounts for routing latency and ensures cache is still valid when request arrives
+- Example: With 5min TTL and 30s buffer, cache is "hot" for first 4:30
+- Adjust based on your routing latency and cache hit requirements
 
 ## Benefits
 
@@ -79,6 +91,13 @@ llms:
 - Request 2 (5min later): Router suggests `claude-haiku-4-5`
 - **Decision**: Switch to `claude-haiku-4-5` (cache expired, route freely)
 - **Result**: Cost-optimized routing, new cache created
+
+### Scenario 4: Custom buffer configuration
+- Config: `cache_ttl: 5`, `cache_buffer_seconds: 60` (1 minute buffer)
+- Request 1: Routes to `claude-sonnet-4-5` (cache created)
+- Request 2 (4min later): Cache still hot (expires at 4:00 with 60s buffer)
+- **Decision**: Stick with cached model if routing suggests same/worse
+- **Result**: Extended cache preservation for high-latency environments
 
 ## Implementation Details
 
