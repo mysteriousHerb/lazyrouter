@@ -273,6 +273,13 @@ async def select_model(ctx: RequestContext, health_checker: Any, router: Any) ->
             raise HTTPException(status_code=503, detail="No healthy models available")
 
         selected_model = None
+
+        # Single model configured: skip routing entirely
+        if len(ctx.config.llms) == 1:
+            selected_model = next(iter(ctx.config.llms))
+            ctx.router_skipped_reason = "single model"
+            logger.info("[router-skip] only one model configured, skipping router: %s", selected_model)
+
         skip_router_on_tool_results = bool(
             getattr(ctx.config.context_compression, "skip_router_on_tool_results", True)
         )
