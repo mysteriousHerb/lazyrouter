@@ -220,7 +220,7 @@ caching:
 Based on your test_proxy logs:
 
 ### Without Caching
-```
+```text
 Request 1: 56KB (system + tools)
 Request 2: 56KB (system + tools)
 Request 3: 56KB (system + tools)
@@ -229,7 +229,7 @@ Total: 448KB over 8 requests
 ```
 
 ### With Caching (Anthropic)
-```
+```text
 Request 1: 56KB (cache creation)
 Request 2: ~5.6KB (cache hit - 90% discount)
 Request 3: ~5.6KB (cache hit - 90% discount)
@@ -239,7 +239,7 @@ Savings: 353KB (79%)
 ```
 
 ### Cost Savings (Anthropic Claude 3.5 Sonnet)
-```
+```text
 Without caching: 56K tokens × 8 requests × $0.003/1K = $1.34
 With caching:    56K × $0.00375/1K + 56K × 7 × $0.0003/1K = $0.33
 Savings: $1.01 (75% reduction)
@@ -294,7 +294,7 @@ async def test_caching():
 asyncio.run(test_caching())
 ```
 
-## Litellm Compatibility
+## LiteLLM Compatibility
 
 Good news: **litellm supports Anthropic's cache_control natively!**
 

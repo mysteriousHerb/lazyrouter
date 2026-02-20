@@ -90,7 +90,7 @@ def analyze_system_prompt(system_content: Any) -> Dict[str, Any]:
     section_map = {name: size for name, _start, _line_count, size in sections}
 
     return {
-        "total_size": len(system_text),
+        "total_size": _serialized_size_bytes(system_text),
         "line_count": len(lines),
         "sections": section_map,
         "section_names": list(section_map.keys()),
@@ -107,14 +107,8 @@ def analyze_log_entry(entry: Dict[str, Any], entry_num: int) -> Optional[Dict[st
         )
         return None
 
-    timestamp = entry.get("timestamp")
-    latency_ms = entry.get("latency_ms")
-    if timestamp is None or latency_ms is None:
-        print(
-            f"Warning: skipping line {entry_num}: missing timestamp/latency_ms",
-            file=sys.stderr,
-        )
-        return None
+    timestamp = entry.get("timestamp", "")
+    latency_ms = entry.get("latency_ms", 0.0)
 
     messages = request.get("messages", [])
     if not isinstance(messages, list):

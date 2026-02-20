@@ -41,7 +41,7 @@ def analyze_tool_definitions(log_file: Path) -> Dict[str, Any]:
         func = tool.get('function', {})
         name = func.get('name', 'unknown')
         description = func.get('description', '')
-        params = func.get('parameters', {}).get('properties', {})
+        params = (func.get('parameters') or {}).get('properties', {})
 
         tool_info = {
             'name': name,
