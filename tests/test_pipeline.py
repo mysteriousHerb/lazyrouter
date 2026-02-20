@@ -101,6 +101,42 @@ def test_normalize_messages_resolves_model_prefix():
     assert ctx.resolved_model == "m1"
 
 
+def test_normalize_messages_resolves_provider_model_name():
+    cfg = Config(
+        serve=ServeConfig(),
+        router=RouterConfig(provider="p1", model="m1"),
+        providers={"p1": ProviderConfig(api_key="k", api_style="openai")},
+        llms={"m1": ModelConfig(provider="p1", model="claude-haiku-4-5-20251001", description="haiku")},
+        health_check=HealthCheckConfig(enabled=False, interval=300),
+    )
+    req = _request(model="claude-haiku-4-5-20251001")
+    ctx = _ctx(request=req, config=cfg)
+    normalize_messages(ctx)
+
+    assert ctx.resolved_model == "m1"
+
+
+def test_normalize_messages_resolves_unique_partial_model_prefix():
+    cfg = Config(
+        serve=ServeConfig(),
+        router=RouterConfig(provider="p1", model="haiku_zzapi"),
+        providers={"p1": ProviderConfig(api_key="k", api_style="openai")},
+        llms={
+            "haiku_zzapi": ModelConfig(
+                provider="p1",
+                model="claude-haiku-4-5-20251001",
+                description="haiku",
+            )
+        },
+        health_check=HealthCheckConfig(enabled=False, interval=300),
+    )
+    req = _request(model="claude-")
+    ctx = _ctx(request=req, config=cfg)
+    normalize_messages(ctx)
+
+    assert ctx.resolved_model == "haiku_zzapi"
+
+
 def test_normalize_messages_auto_stays_auto():
     ctx = _ctx()
     normalize_messages(ctx)
