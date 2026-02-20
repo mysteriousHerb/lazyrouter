@@ -101,6 +101,42 @@ def test_normalize_messages_resolves_model_prefix():
     assert ctx.resolved_model == "m1"
 
 
+def test_normalize_messages_resolves_provider_model_name():
+    cfg = Config(
+        serve=ServeConfig(),
+        router=RouterConfig(provider="p1", model="m1"),
+        providers={"p1": ProviderConfig(api_key="k", api_style="openai")},
+        llms={"m1": ModelConfig(provider="p1", model="claude-haiku-4-5-20251001", description="haiku")},
+        health_check=HealthCheckConfig(enabled=False, interval=300),
+    )
+    req = _request(model="claude-haiku-4-5-20251001")
+    ctx = _ctx(request=req, config=cfg)
+    normalize_messages(ctx)
+
+    assert ctx.resolved_model == "m1"
+
+
+def test_normalize_messages_resolves_unique_partial_model_prefix():
+    cfg = Config(
+        serve=ServeConfig(),
+        router=RouterConfig(provider="p1", model="haiku_zzapi"),
+        providers={"p1": ProviderConfig(api_key="k", api_style="openai")},
+        llms={
+            "haiku_zzapi": ModelConfig(
+                provider="p1",
+                model="claude-haiku-4-5-20251001",
+                description="haiku",
+            )
+        },
+        health_check=HealthCheckConfig(enabled=False, interval=300),
+    )
+    req = _request(model="claude-")
+    ctx = _ctx(request=req, config=cfg)
+    normalize_messages(ctx)
+
+    assert ctx.resolved_model == "haiku_zzapi"
+
+
 def test_normalize_messages_auto_stays_auto():
     ctx = _ctx()
     normalize_messages(ctx)
@@ -258,6 +294,36 @@ def test_select_model_auto_uses_router():
     assert ctx.routing_result is not None
     assert ctx.router_skipped_reason is None
     assert ctx.model_config is not None
+
+
+def test_select_model_single_model_skips_router():
+    """When only one model is configured, auto should skip routing and use it directly."""
+    single_cfg = Config(
+        serve=ServeConfig(),
+        router=RouterConfig(provider="p1", model="m1"),
+        providers={"p1": ProviderConfig(api_key="k", api_style="openai")},
+        llms={"m1": ModelConfig(provider="p1", model="gpt-test", description="only model")},
+        health_check=HealthCheckConfig(enabled=False, interval=300),
+        context_compression=ContextCompressionConfig(),
+    )
+    ctx = _ctx(config=single_cfg)
+    normalize_messages(ctx)
+
+    router = _FakeRouter(returns_model="m1")
+    router_called = False
+    original_route = router.route
+    async def tracking_route(*args, **kwargs):
+        nonlocal router_called
+        router_called = True
+        return await original_route(*args, **kwargs)
+    router.route = tracking_route
+
+    asyncio.run(select_model(ctx, _FakeHealthChecker(healthy={"m1"}), router))
+
+    assert ctx.selected_model == "m1"
+    assert ctx.router_skipped_reason == "single model"
+    assert ctx.routing_result is None
+    assert not router_called
 
 
 def test_select_model_direct_skips_router():

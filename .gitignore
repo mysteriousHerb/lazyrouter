@@ -29,6 +29,9 @@ ENV/
 # Environment variables
 .env
 
+# Claude Code skills (may contain personal paths/IDs)
+.claude/skills/
+
 # IDE
 .vscode/
 .idea/
