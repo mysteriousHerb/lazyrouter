@@ -26,7 +26,7 @@ def analyze_tool_definitions(log_file: Path) -> Dict[str, Any]:
     except json.JSONDecodeError as exc:
         return {"error": f"First log entry is not valid JSON: {exc}"}
 
-    tools = first_entry['request'].get('tools', [])
+    tools = first_entry.get('request', {}).get('tools', [])
 
     analysis = {
         'total_count': len(tools),

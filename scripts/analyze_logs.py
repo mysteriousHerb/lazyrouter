@@ -90,7 +90,7 @@ def analyze_system_prompt(system_content: Any) -> Dict[str, Any]:
     section_map = {name: size for name, _start, _line_count, size in sections}
 
     return {
-        "total_size": _serialized_size_bytes(system_text),
+        "total_size": len(system_text),
         "line_count": len(lines),
         "sections": section_map,
         "section_names": list(section_map.keys()),

@@ -93,7 +93,7 @@ def should_use_caching(provider_api_style: str) -> bool:
     # For now, only Anthropic has explicit caching support
     # OpenAI does automatic caching, so we don't need to modify requests
     return provider_api_style.lower() == "anthropic"
-```text
+```
 
 #### Step 2: Integrate into Router
 
@@ -181,7 +181,7 @@ async def chat_completion(
     params.update({k: v for k, v in kwargs.items() if k not in INTERNAL_PARAM_KEYS})
 
     # ... rest of the method stays the same
-```text
+```
 
 #### Step 3: Monitor Cache Usage
 
@@ -201,7 +201,7 @@ if api_style.lower() == "anthropic" and "usage" in response_dict:
         logger.info(f"[cache] Created cache: {cache_creation} tokens")
     if cache_read > 0:
         logger.info(f"[cache] Cache HIT: {cache_read} tokens saved")
-```text
+```
 
 ### Step 4: Configuration
 
@@ -220,7 +220,7 @@ caching:
 Based on your test_proxy logs:
 
 ### Without Caching
-```text
+```
 Request 1: 56KB (system + tools)
 Request 2: 56KB (system + tools)
 Request 3: 56KB (system + tools)
@@ -229,7 +229,7 @@ Total: 448KB over 8 requests
 ```
 
 ### With Caching (Anthropic)
-```text
+```
 Request 1: 56KB (cache creation)
 Request 2: ~5.6KB (cache hit - 90% discount)
 Request 3: ~5.6KB (cache hit - 90% discount)
@@ -239,7 +239,7 @@ Savings: 353KB (79%)
 ```
 
 ### Cost Savings (Anthropic Claude 3.5 Sonnet)
-```text
+```
 Without caching: 56K tokens × 8 requests × $0.003/1K = $1.34
 With caching:    56K × $0.00375/1K + 56K × 7 × $0.0003/1K = $0.33
 Savings: $1.01 (75% reduction)
