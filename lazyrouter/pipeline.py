@@ -308,14 +308,37 @@ async def _handle_cache_aware_routing(
         )
         return None
 
+    cached_score = _model_elo_score(cached_model_config)
+    healthy_scores = [
+        _model_elo_score(mc)
+        for model_name, mc in ctx.config.llms.items()
+        if model_name not in health_checker.unhealthy_models
+    ]
+    highest_healthy_score = max(healthy_scores) if healthy_scores else 0
+
+    if cached_score >= highest_healthy_score:
+        ctx.router_skipped_reason = f"hot cache (age={int(cache_age_seconds)}s, highest-ELO)"
+        logger.info(
+            "[cache-aware] sticking with %s (cache_age=%.1fs, ttl=%dmin, no better healthy model)",
+            cached_model,
+            cache_age_seconds,
+            cached_model_config.cache_ttl,
+        )
+        return cached_model
+
     routing_result = await router.route(
         ctx.messages,
         exclude_models=health_checker.unhealthy_models or None,
     )
     routed_model = routing_result.model
     routed_config = ctx.config.llms.get(routed_model)
+    if routed_config is None:
+        logger.warning(
+            "[cache-aware] router suggested unknown model '%s'; sticking with cached model %s",
+            routed_model,
+            cached_model,
+        )
 
-    cached_score = _model_elo_score(cached_model_config)
     routed_score = _model_elo_score(routed_config) if routed_config else 0
 
     if routed_score > cached_score:
@@ -338,6 +361,32 @@ async def _handle_cache_aware_routing(
         cached_model_config.cache_ttl,
     )
     return cached_model
+
+
+def _update_cache_tracker_for_selection(ctx: RequestContext) -> None:
+    """Update or clear cache tracking after a model is selected."""
+    model_config = ctx.model_config
+    if not model_config:
+        return
+
+    if not model_config.cache_ttl:
+        cache_tracker_clear(ctx.session_key)
+        return
+
+    existing_entry = cache_tracker_get(ctx.session_key)
+    if not existing_entry:
+        cache_tracker_set(ctx.session_key, ctx.selected_model)
+        return
+
+    existing_model, age_seconds = existing_entry
+    buffer_seconds = ctx.config.router.cache_buffer_seconds
+    if existing_model != ctx.selected_model:
+        cache_tracker_set(ctx.session_key, ctx.selected_model)
+        return
+
+    # Refresh only when the existing entry has expired; keep hot-cache age stable on hits.
+    if not is_cache_hot(age_seconds, model_config.cache_ttl, buffer_seconds):
+        cache_tracker_set(ctx.session_key, ctx.selected_model)
 
 
 async def select_model(ctx: RequestContext, health_checker: Any, router: Any) -> None:
@@ -397,9 +446,7 @@ async def select_model(ctx: RequestContext, health_checker: Any, router: Any) ->
     ctx.selected_model = selected_model
     ctx.model_config = model_config
 
-    # Track cache creation for cacheable models
-    if model_config.cache_ttl:
-        cache_tracker_set(ctx.session_key, selected_model)
+    _update_cache_tracker_for_selection(ctx)
 
 
 # ---------------------------------------------------------------------------

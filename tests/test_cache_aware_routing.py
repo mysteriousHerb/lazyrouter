@@ -195,6 +195,70 @@ async def test_cache_aware_routing_upgrade_to_better_model(mock_config):
 
 
 @pytest.mark.asyncio
+async def test_cache_aware_routing_does_not_downgrade_on_hot_cache(mock_config):
+    """Test that hot-cache stickiness prevents downgrade when router suggests worse model."""
+    request = ChatCompletionRequest(
+        model="auto",
+        messages=[Message(role="user", content="Simple follow-up")],
+    )
+
+    ctx = RequestContext(request=request, config=mock_config)
+    ctx.messages = [{"role": "user", "content": "Simple follow-up"}]
+    ctx.session_key = "test-session-downgrade"
+    ctx.resolved_model = "auto"
+
+    # Cache currently on sonnet (better than haiku by ELO score)
+    cache_tracker_set(ctx.session_key, "sonnet")
+
+    health_checker = MagicMock()
+    health_checker.healthy_models = {"haiku", "sonnet", "opus"}
+    health_checker.unhealthy_models = set()
+    health_checker.note_request_and_maybe_run_cold_boot_check = AsyncMock()
+
+    router = MagicMock()
+    routing_result = MagicMock()
+    routing_result.model = "haiku"
+    routing_result.reasoning = "Cheaper model is enough"
+    routing_result.raw_response = '{"model": "haiku", "reasoning": "Cheaper model is enough"}'
+    router.route = AsyncMock(return_value=routing_result)
+
+    await select_model(ctx, health_checker, router)
+
+    assert ctx.selected_model == "sonnet"
+    assert "hot cache" in (ctx.router_skipped_reason or "")
+
+
+@pytest.mark.asyncio
+async def test_cache_aware_routing_skips_router_when_cached_is_highest_elo(mock_config):
+    """Hot cache should skip router call when cached model is already highest-ELO healthy."""
+    request = ChatCompletionRequest(
+        model="auto",
+        messages=[Message(role="user", content="Continue previous task")],
+    )
+    ctx = RequestContext(request=request, config=mock_config)
+    ctx.messages = [{"role": "user", "content": "Continue previous task"}]
+    ctx.session_key = "test-session-highest-elo"
+    ctx.resolved_model = "auto"
+
+    # Opus has highest ELO in mock_config
+    cache_tracker_set(ctx.session_key, "opus")
+
+    health_checker = MagicMock()
+    health_checker.healthy_models = {"haiku", "sonnet", "opus"}
+    health_checker.unhealthy_models = set()
+    health_checker.note_request_and_maybe_run_cold_boot_check = AsyncMock()
+
+    router = MagicMock()
+    router.route = AsyncMock()
+
+    await select_model(ctx, health_checker, router)
+
+    assert ctx.selected_model == "opus"
+    assert "highest-ELO" in (ctx.router_skipped_reason or "")
+    router.route.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_cache_aware_routing_expired_cache_routes_freely(mock_config):
     """Test that we route freely when cache has expired"""
     request = ChatCompletionRequest(
@@ -235,6 +299,74 @@ async def test_cache_aware_routing_expired_cache_routes_freely(mock_config):
 
 
 @pytest.mark.asyncio
+async def test_cache_aware_routing_ignores_removed_cached_model(mock_config):
+    """Test fallback to normal routing when cache tracker references unknown model."""
+    request = ChatCompletionRequest(
+        model="auto",
+        messages=[Message(role="user", content="Route this")],
+    )
+    ctx = RequestContext(request=request, config=mock_config)
+    ctx.messages = [{"role": "user", "content": "Route this"}]
+    ctx.session_key = "test-session-removed-model"
+    ctx.resolved_model = "auto"
+
+    # Tracker points to a model alias not present in config.llms
+    cache_tracker_set(ctx.session_key, "removed_model_alias")
+
+    health_checker = MagicMock()
+    health_checker.healthy_models = {"haiku", "sonnet", "opus"}
+    health_checker.unhealthy_models = set()
+    health_checker.note_request_and_maybe_run_cold_boot_check = AsyncMock()
+
+    router = MagicMock()
+    routing_result = MagicMock()
+    routing_result.model = "sonnet"
+    routing_result.reasoning = "Fallback route"
+    routing_result.raw_response = '{"model": "sonnet", "reasoning": "Fallback route"}'
+    router.route = AsyncMock(return_value=routing_result)
+
+    await select_model(ctx, health_checker, router)
+
+    assert ctx.selected_model == "sonnet"
+
+
+@pytest.mark.asyncio
+async def test_cache_tracker_not_refreshed_on_hot_cache_hit(mock_config):
+    """Test cache timestamp is not refreshed on hot-cache hit for same selected model."""
+    request = ChatCompletionRequest(
+        model="auto",
+        messages=[Message(role="user", content="Follow-up")],
+    )
+    ctx = RequestContext(request=request, config=mock_config)
+    ctx.messages = [{"role": "user", "content": "Follow-up"}]
+    ctx.session_key = "test-session-hot-hit"
+    ctx.resolved_model = "auto"
+
+    health_checker = MagicMock()
+    health_checker.healthy_models = {"haiku", "sonnet", "opus"}
+    health_checker.unhealthy_models = set()
+    health_checker.note_request_and_maybe_run_cold_boot_check = AsyncMock()
+
+    router = MagicMock()
+    routing_result = MagicMock()
+    routing_result.model = "haiku"
+    routing_result.reasoning = "Stay on same model"
+    routing_result.raw_response = '{"model":"haiku"}'
+    router.route = AsyncMock(return_value=routing_result)
+
+    with patch("lazyrouter.cache_tracker.time.monotonic") as mock_monotonic:
+        mock_monotonic.return_value = 1000.0
+        cache_tracker_set(ctx.session_key, "haiku")
+        initial_timestamp = _cache_timestamps[ctx.session_key][1]
+
+        mock_monotonic.return_value = 1020.0
+        await select_model(ctx, health_checker, router)
+        updated_timestamp = _cache_timestamps[ctx.session_key][1]
+
+    assert updated_timestamp == initial_timestamp
+
+
+@pytest.mark.asyncio
 async def test_cache_tracking_updates_on_model_selection(mock_config):
     """Test that cache tracker is updated when cacheable model is selected"""
     request = ChatCompletionRequest(
@@ -269,3 +401,60 @@ async def test_cache_tracking_updates_on_model_selection(mock_config):
     model_name, age_seconds = cache_entry
     assert model_name == "sonnet"
     assert age_seconds < 1.0
+
+
+@pytest.mark.asyncio
+async def test_non_cacheable_selection_clears_previous_cache_entry():
+    """Selecting a non-cacheable model should clear stale cache tracker state."""
+    cfg = Config(
+        serve=ServeConfig(host="0.0.0.0", port=8000),
+        router=RouterConfig(
+            provider="test_provider",
+            model="test-router-model",
+            input_price=0.1,
+            output_price=0.1,
+        ),
+        providers={
+            "test_provider": ProviderConfig(
+                api_key="test-key",
+                base_url="https://test.com",
+                api_style="openai",
+            )
+        },
+        llms={
+            "cacheable": ModelConfig(
+                provider="test_provider",
+                model="claude-haiku-4-5",
+                description="Cacheable model",
+                cache_ttl=5,
+            ),
+            "noncache": ModelConfig(
+                provider="test_provider",
+                model="gpt-4o-mini",
+                description="Non-cacheable model",
+                cache_ttl=None,
+            ),
+        },
+    )
+    request = ChatCompletionRequest(
+        model="noncache",
+        messages=[Message(role="user", content="Use explicit model")],
+    )
+    ctx = RequestContext(request=request, config=cfg)
+    ctx.messages = [{"role": "user", "content": "Use explicit model"}]
+    ctx.session_key = "test-session-clear-noncache"
+    ctx.resolved_model = "noncache"
+
+    cache_tracker_set(ctx.session_key, "cacheable")
+
+    health_checker = MagicMock()
+    health_checker.note_request_and_maybe_run_cold_boot_check = AsyncMock()
+    health_checker.healthy_models = {"cacheable", "noncache"}
+    health_checker.unhealthy_models = set()
+
+    router = MagicMock()
+
+    await select_model(ctx, health_checker, router)
+
+    assert ctx.selected_model == "noncache"
+    assert cache_tracker_get(ctx.session_key) is None

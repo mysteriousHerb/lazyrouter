@@ -99,7 +99,7 @@ llms:
 ### Scenario 4: Custom buffer configuration
 - Config: `cache_ttl: 5`, `cache_buffer_seconds: 60` (1 minute buffer)
 - Request 1: Routes to `claude-sonnet-4-5` (cache created)
-- Request 2 (4min later): Cache still hot (expires at 4:00 with 60s buffer)
+- Request 2 (3:59 later): Cache still hot (expires at 4:00 with 60s buffer)
 - **Decision**: Stick with cached model if routing suggests same/worse
 - **Result**: Extended cache preservation for high-latency environments
 
