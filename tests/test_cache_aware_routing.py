@@ -12,7 +12,7 @@ from lazyrouter.cache_tracker import (
 )
 from lazyrouter.config import Config, ModelConfig, RouterConfig, ServeConfig, ProviderConfig
 from lazyrouter.models import ChatCompletionRequest, Message
-from lazyrouter.pipeline import RequestContext, select_model
+from lazyrouter.pipeline import RequestContext, call_with_fallback, select_model
 
 
 @pytest.fixture
@@ -458,3 +458,39 @@ async def test_non_cacheable_selection_clears_previous_cache_entry():
 
     assert ctx.selected_model == "noncache"
     assert cache_tracker_get(ctx.session_key) is None
+
+
+@pytest.mark.asyncio
+async def test_call_with_fallback_updates_cache_to_actual_model(mock_config):
+    """Fallback success should update cache tracker to the actual responding model."""
+    request = ChatCompletionRequest(
+        model="auto",
+        messages=[Message(role="user", content="Hello")],
+    )
+    ctx = RequestContext(request=request, config=mock_config)
+    ctx.messages = [{"role": "user", "content": "Hello"}]
+    ctx.session_key = "test-session-fallback-cache"
+    ctx.selected_model = "haiku"
+    ctx.model_config = mock_config.llms["haiku"]
+    ctx.provider_kwargs = {}
+    ctx.effective_max_tokens = None
+    ctx.is_tool_continuation_turn = False
+
+    # Simulate tracker state created during model selection.
+    cache_tracker_set(ctx.session_key, "haiku")
+
+    health_checker = MagicMock()
+    health_checker.healthy_models = {"haiku", "sonnet", "opus"}
+    health_checker.unhealthy_models = set()
+
+    router_instance = MagicMock()
+    with patch("lazyrouter.pipeline.select_fallback_models", return_value=["sonnet"]), patch(
+        "lazyrouter.pipeline.call_router_with_gemini_fallback",
+        new=AsyncMock(side_effect=[Exception("timeout"), {"id": "ok"}]),
+    ):
+        await call_with_fallback(ctx, router_instance, health_checker)
+
+    assert ctx.selected_model == "sonnet"
+    cache_entry = cache_tracker_get(ctx.session_key)
+    assert cache_entry is not None
+    assert cache_entry[0] == "sonnet"

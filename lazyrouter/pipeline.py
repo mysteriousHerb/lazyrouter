@@ -631,6 +631,7 @@ async def call_with_fallback(ctx: RequestContext, router_instance: Any, health_c
             ctx.provider_api_style = api_style
             ctx.provider_messages = prep_messages
             ctx.extra_kwargs = prep_extra
+            _update_cache_tracker_for_selection(ctx)
             return resp
         except Exception as e:
             last_error = e
@@ -651,6 +652,7 @@ async def call_with_fallback(ctx: RequestContext, router_instance: Any, health_c
             ctx.provider_api_style = api_style
             ctx.provider_messages = prep_messages
             ctx.extra_kwargs = prep_extra
+            _update_cache_tracker_for_selection(ctx)
             return resp
 
     if last_error:
