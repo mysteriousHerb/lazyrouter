@@ -69,8 +69,6 @@ providers:
 router:
   model: "gpt-4o-mini"           # Cheap model for routing
   provider: "openai"
-  input_price: 0.15
-  output_price: 0.60
 
 llms:
   gpt-4o-mini:

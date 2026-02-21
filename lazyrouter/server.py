@@ -398,6 +398,8 @@ def create_app(
             result = health_checker.last_results.get(model_name)
             if result is not None:
                 results.append(result)
+        if health_checker.last_router_result is not None:
+            results.append(health_checker.last_router_result)
 
         return HealthStatusResponse(
             interval=config.health_check.interval,

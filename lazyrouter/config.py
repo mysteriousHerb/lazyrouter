@@ -34,8 +34,6 @@ class RouterConfig(BaseModel):
     provider: str
     model: str
     temperature: float = 0.0
-    input_price: Optional[float] = None
-    output_price: Optional[float] = None
     context_messages: Optional[int] = (
         None  # Number of recent messages to include (None = last user message only)
     )

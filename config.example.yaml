@@ -34,8 +34,6 @@ providers:
 router:
   provider: gemini
   model: "gemini-2.5-flash"
-  input_price: 0.5
-  output_price: 3.0
   context_messages: 10
   # prompt: |  # Optional: override the default routing prompt
   #   You are a model router. Select the best model for the user's request.

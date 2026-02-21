@@ -259,6 +259,7 @@ class HealthChecker:
             config.llms.keys()
         )  # assume all healthy at start
         self.last_results: Dict[str, HealthCheckResult] = {}
+        self.last_router_result: Optional[HealthCheckResult] = None
         self.last_check: Optional[str] = None
         self._task: Optional[asyncio.Task] = None
         self._run_lock = asyncio.Lock()
@@ -316,6 +317,24 @@ class HealthChecker:
         """Run a single health check against all configured models."""
         tasks = []
         model_names = []
+        router_provider_name = self.config.router.provider
+        router_model = self.config.router.model
+        router_api_key = self.config.get_api_key(router_provider_name)
+        router_base_url = self.config.get_base_url(router_provider_name)
+        router_api_style = self.config.get_api_style(router_provider_name)
+        router_provider = LiteLLMWrapper(
+            router_api_key, router_base_url, router_api_style, router_model
+        )
+        router_task = asyncio.wait_for(
+            check_model_health(
+                router_model,
+                router_provider,
+                router_model,
+                router_provider_name,
+                is_router=True,
+            ),
+            timeout=self.hc_config.max_latency_ms / 1000 + 5,  # generous timeout
+        )
 
         for model_name, model_config in self.config.llms.items():
             api_key = self.config.get_api_key(model_config.provider)
@@ -336,7 +355,9 @@ class HealthChecker:
                 )
             )
 
-        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+        gathered = await asyncio.gather(*tasks, router_task, return_exceptions=True)
+        raw_results = gathered[:-1]
+        raw_router_result = gathered[-1]
 
         results = []
         new_healthy = set()
@@ -379,6 +400,40 @@ class HealthChecker:
                 self.last_results[name] = result
                 logger.warning(f"Health check: {name} unhealthy — {err}")
 
+        if isinstance(raw_router_result, HealthCheckResult):
+            router_result = raw_router_result
+            router_result.is_healthy = is_result_healthy(
+                router_result, self.hc_config.max_latency_ms
+            )
+            self.last_router_result = router_result
+            if not router_result.is_healthy:
+                reason = (
+                    router_result.error
+                    if router_result.status == "error"
+                    else (
+                        "total_ms unavailable"
+                        if router_result.total_ms is None
+                        else f"total_ms={router_result.total_ms} > {self.hc_config.max_latency_ms}"
+                    )
+                )
+                logger.warning(f"Health check: router model unhealthy - {reason}")
+        else:
+            err = (
+                "Timed out"
+                if isinstance(raw_router_result, asyncio.TimeoutError)
+                else str(raw_router_result)
+            )
+            self.last_router_result = HealthCheckResult(
+                model=router_model,
+                provider=router_provider_name,
+                actual_model=router_model,
+                is_router=True,
+                status="error",
+                is_healthy=False,
+                error=err,
+            )
+            logger.warning(f"Health check: router model unhealthy - {err}")
+
         # If ALL models are unhealthy, log error and keep none available (strict mode)
         if not new_healthy:
             logger.error("Health check: ALL models unhealthy; keeping none available")
@@ -393,8 +448,13 @@ class HealthChecker:
 
         self.healthy_models = new_healthy
         self.last_check = datetime.now(timezone.utc).isoformat()
+        router_health = (
+            "unknown"
+            if self.last_router_result is None
+            else ("healthy" if self.last_router_result.is_healthy else "unhealthy")
+        )
         logger.info(
-            f"Health check complete: {len(new_healthy)}/{len(self.config.llms)} models healthy"
+            f"Health check complete: {len(new_healthy)}/{len(self.config.llms)} models healthy; router={router_health}"
         )
         return results
 
