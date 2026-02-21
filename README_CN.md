@@ -6,106 +6,86 @@
   <img src="assets/懒人路由 logo.png" alt="LazyRouter Logo" width="280"/>
 </p>
 
-懒人路由是一个轻量级的 OpenAI 兼容路由器，能够为每个请求自动选择最合适的模型。
+LazyRouter 是一个完全自托管、OpenAI 兼容的模型路由器。你只需要在 YAML 里配置 provider 和模型，发送 `model: "auto"`，它会按你的策略自动选择最合适的模型。
 
-它的设计理念是简单易用：在 YAML 中定义提供商和模型，调用 `model: "auto"`，让路由器自动选择。
+## 为什么选择 LazyRouter
 
-## 为什么需要它
+1. 完全自托管的路由链路：中间没有额外路由 SaaS，也没有额外按请求收费。
+2. Provider/Endpoint 自由：通过 `base_url` + `api_style`，可路由到 OpenAI、Anthropic、Gemini 或任意 OpenAI 兼容网关。
+3. 策略驱动的成本与质量控制：你可以自行定义模型描述、价格和 Elo 信号，让路由符合你的预算和质量标准。
+4. 长会话额外节省：
+   - 确定性的历史压缩（已实现）
+   - 面向 OpenClaw 场景的 Claude 风格缓存粘性路由（已实现）
+   - 更深入的工具参数裁剪（规划中）
 
-在智能体工作流中，上下文增长很快，token 消耗也会变得昂贵。如果没有智能路由，像 "hi" 或 "hello" 这样的简单提示也会调用高端模型（比如 Opus），这并不经济。
+## 亮点
 
-懒人路由通过在中间放置一个便宜、快速的路由模型作为把关模型来解决这个问题：
-
-- 它为每个请求选择合适的模型，而不是总是使用最贵的那个。
-- 它减少了长时间运行的智能体会话中的不必要开支（特别是 OpenClaw 风格的工作流）。
-- 它保持单一的 OpenAI 兼容接口，同时在后台处理不同提供商的差异。
-
-它还帮助在不同 API 风格（OpenAI、Gemini 和 Anthropic）之间进行转换。
-
-## 特性亮点
-
-- OpenAI 兼容的 `/v1/chat/completions` 端点
-- 基于 LLM 的路由，无需额外的训练流程
-- 单一配置支持多个提供商（OpenAI、Anthropic、Gemini、OpenAI 兼容网关）
-- 可作为 OpenClaw 等智能体框架的成本控制守门人
-- 内置 OpenAI、Gemini 和 Anthropic 风格之间的兼容性处理
-- 支持流式和非流式响应
-- 健康检查和基准测试端点，提供运维可见性
-- 速率限制或错误时自动切换到 ELO 相近的模型
-- 所有模型暂时不可用时指数退避重试
+- OpenAI 兼容的 `POST /v1/chat/completions`（支持流式和非流式）
+- `auto` 自动路由，并返回路由推理信息
+- 支持 OpenAI、Anthropic、Gemini 及 OpenAI 兼容端点
+- 健康检查感知路由（`/v1/health-status`、`/v1/health-check`）
+- 可重试错误自动回退到 Elo 相近模型
+- 基于 `cache_ttl` + `cache_buffer_seconds` 的缓存粘性路由
+- 工具延续轮优化（`skip_router_on_tool_results`）
+- 会话重置支持（`/new` 或 `/reset` 清理路由/工具缓存状态）
 
 ## 快速开始
 
 ### 方式一：直接从 GitHub 运行（无需克隆）
 
-1. 安装 `uv`：<https://docs.astral.sh/uv/getting-started/installation/>
-2. 创建配置文件（下载 [config.example.yaml](https://github.com/mysteriousHerb/lazyrouter/blob/main/config.example.yaml) 作为起点）。你可以直接在 config.yaml 中填写 API 密钥，无需 .env 文件。
-3. 运行：
+运行前，请先下载 [`config.example.yaml`](https://raw.githubusercontent.com/mysteriousHerb/lazyrouter/main/config.example.yaml) 并命名为 `config.yaml`，再下载 [`.env.example`](https://raw.githubusercontent.com/mysteriousHerb/lazyrouter/main/.env.example) 并命名为 `.env`，然后填入你的密钥。
 
 ```bash
-uvx --from git+https://github.com/mysteriousHerb/lazyrouter.git lazyrouter --config config.yaml
+uvx --from git+https://github.com/mysteriousHerb/lazyrouter.git lazyrouter --config config.yaml --env-file .env
 ```
 
-### 方式二：克隆并本地运行
-
-1. 安装 `uv`：<https://docs.astral.sh/uv/getting-started/installation/>
-2. 克隆仓库并安装依赖：
+### 方式二：克隆后本地运行
 
 ```bash
 git clone https://github.com/mysteriousHerb/lazyrouter
 cd lazyrouter
 uv sync
-cp .env.example .env
 cp config.example.yaml config.yaml
-```
-
-3. 编辑 `.env` 和 `config.yaml`，填入你的 API 密钥、提供商和模型。
-4. 启动服务器：
-
-```bash
+cp .env.example .env
 uv run python main.py --config config.yaml
 ```
 
-5. 向 `http://localhost:1234/v1/chat/completions` 发送请求。
+默认地址：`http://localhost:1234`（由 `config.example.yaml` 配置）
 
 ## 配置说明
 
-使用 `config.example.yaml` 作为基础。API 密钥从 `.env` 加载。
+以 `config.example.yaml` 为基准，重点如下：
 
-- `llms` 中的 `coding_elo` / `writing_elo` 是质量信号，可以从 `https://arena.ai/leaderboard` 获取。
-- `context_compression` 控制在长时间智能体运行期间如何积极地修剪旧历史记录，以控制 token 使用和成本。
+- `providers.*.api_style`：
+  - `anthropic` 和 `gemini` 会走对应适配逻辑
+  - 其他值都按 OpenAI 兼容处理（如 `openai`、`openai-completions`、`openai-responses`）
+- `router.context_messages`：路由模型可见的最近上下文条数。更高通常更准，但路由本身 token 开销也更高。
+- `router.cache_buffer_seconds`：缓存 TTL 到期前的安全缓冲，避免临界时间点失去缓存命中。
+- `llms.<name>.cache_ttl`：为该模型开启缓存感知粘性路由（分钟）。缓存处于热状态时，LazyRouter 会尽量避免不必要降级，以保留缓存命中。
+- `context_compression.keep_recent_user_turns_in_chained_tool_calls`：工具链式调用时，保护最近若干用户轮不被压缩。
+- `context_compression.skip_router_on_tool_results`：工具结果延续轮复用上次选中的模型。
+- `health_check.idle_after_seconds`：空闲后暂停后台健康检查，避免无效 token 消耗。
+- Elo 值（`coding_elo`、`writing_elo`）同时驱动自动回退排序——遇到可重试错误时，LazyRouter 会选择 Elo 最接近的健康模型。
 
-### 自定义路由提示词
+### 自定义路由 Prompt
 
-你可以通过在配置文件的 `router` 部分添加 `prompt` 字段来覆盖默认的路由提示词：
+你可以覆盖默认路由提示词：
 
 ```yaml
 router:
-  provider: gemini
-  model: "gemini-2.5-flash"
   prompt: |
-    你是一个模型路由器。为用户的请求选择最合适的模型。
-    如果用户明确请求特定模型，请遵循该请求。
-    可用模型：{model_descriptions}
-    上下文：{context}
-    当前请求：{current_request}
-    请给出推理和模型选择。
+    You are a model router. Select the best model for the user's request.
+    Available models: {model_descriptions}
+    Context: {context}
+    Current request: {current_request}
+    Respond with reasoning and model choice.
 ```
 
-提示词必须包含这些占位符：`{model_descriptions}`、`{context}` 和 `{current_request}`。
-
-### 用户指定路由
-
-默认路由提示词现在支持用户的明确模型请求。你可以说：
-- "用 opus 处理这个任务"
-- "路由到 gemini-2.5-pro"
-- "切换到 claude-sonnet"
-
-路由器会遵循这些明确的请求，将任务路由到指定的模型。
+必须包含占位符：`{model_descriptions}`、`{context}`、`{current_request}`。
 
 ## OpenClaw 集成
 
-编辑你的 `.openclaw/openclaw.json`，在 `models.providers` 下添加 LazyRouter 提供商：
+在 `.openclaw/openclaw.json` 中添加 LazyRouter provider：
 
 ```json
 {
@@ -122,19 +102,71 @@ router:
 }
 ```
 
-然后将智能体主模型设置为：
+把主模型设置为：
 
 ```json
- "agents": {
+{
+  "agents": {
     "defaults": {
       "model": {
         "primary": "lazyrouter/auto"
-      },
+      }
     }
   }
+}
 ```
 
-### 请求示例
+## 请求流转（OpenClaw -> LazyRouter -> 模型 -> OpenClaw）
+
+```mermaid
+sequenceDiagram
+    participant OC as OpenClaw Agent
+    participant LR as LazyRouter
+    participant R as Routing LLM
+    participant M as Actual Model Endpoint
+
+    OC->>LR: OpenAI-completions 请求
+    LR->>R: 路由提示词（小上下文+当前请求+模型清单）
+    R-->>LR: 返回所选模型
+    LR->>LR: 历史与工具结果压缩
+    LR->>M: 按 provider 风格适配后发起请求
+    M-->>LR: 模型响应
+    LR->>LR: 归一化为 OpenAI 兼容响应
+    LR-->>OC: 返回 OpenAI 兼容响应
+```
+
+注意：部分轮次会跳过路由器调用（例如仅配置了单模型、工具结果延续轮复用、缓存热状态粘性）。
+
+### 路由 LLM 实际收到什么？
+
+LazyRouter 会向路由模型发送一条路由消息（`role: user`），内容包含：
+
+- `Available models`：候选模型描述、可选 Elo、可选价格信息。
+- `Recent conversation context`：最近小窗口上下文（由 `router.context_messages` 控制，不是完整历史）。
+- `CURRENT USER REQUEST`：最新用户输入，作为最主要路由信号。
+
+在路由前如何保持小上下文：
+
+- 仅保留最近 `context_messages - 1` 条历史上下文。
+- 用户/助手文本在路由上下文中按每行约 300 字符截断。
+- 工具结果会摘要为一行（如 `[tool_name: 42L/3810ch]`），而不是完整原始输出。
+- 助手的工具调用只保留工具名（如 `assistant: called read_file, search_code`）。
+
+概念化的路由请求载荷：
+
+```json
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "You are a model router...\n\nAvailable models:\n- gemini-2.5-flash: ... [coding_elo=..., input_price=...]\n- claude-opus: ...\n\nRecent conversation context:\nassistant: called read_file\ntool: [read_file: 42L/3810ch]\nuser: please fix the retry logic...\n\nCURRENT USER REQUEST (most important for routing):\nadd tests for fallback behavior"
+    }
+  ],
+  "response_format": "json_schema(reasoning, model)"
+}
+```
+
+## 请求示例
 
 ```bash
 curl -X POST http://localhost:1234/v1/chat/completions \
@@ -147,45 +179,20 @@ curl -X POST http://localhost:1234/v1/chat/completions \
 
 ## API 端点
 
-- `GET /health` - 存活检查
-- `GET /v1/models` - 列出可用模型
-- `GET /v1/health-status` - 显示缓存的健康检查结果
-- `GET /v1/health-check` - 立即运行健康检查并返回结果
-- `POST /v1/chat/completions` - OpenAI 兼容的聊天端点
+- `GET /health`
+- `GET /v1/models`（也支持 `GET /models`）
+- `GET /v1/health-status`
+- `GET /v1/health-check`
+- `POST /v1/chat/completions`
 
-## 技术实现
+## 定位对比
 
-懒人路由使用轻量级的基于 LLM 的路由架构：
+相比 [BlockRunAI/ClawRouter](https://github.com/BlockRunAI/ClawRouter) 和 [ulab-uiuc/LLMRouter](https://github.com/ulab-uiuc/LLMRouter)：LLMRouter 更偏向”研究/评测型”的综合框架；LazyRouter 的定位是轻量级、自托管、可直接上线的运行时路由网关。
 
-```text
-┌─────────────────┐     ┌──────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│  客户端请求      │────▶│  路由模型         │────▶│  上下文裁剪       │────▶│  LLM 提供商      │
-│  (model: auto)  │     │  (便宜且快速)     │     │  (token 控制)    │     │  (via LiteLLM)  │
-└─────────────────┘     └──────────────────┘     └──────────────────┘     └─────────────────┘
-                               │                                                   │
-                               │ 选择最佳模型                                        │
-                               ▼                                                   ▼
-                        ┌──────────────────┐                              ┌─────────────────┐
-                        │ OpenAI/Anthropic │                              │    返回响应      │
-                        │ Gemini/Custom    │                              │    给客户端      │
-                        └──────────────────┘                              └─────────────────┘
-```
-
-核心组件：
-
-- **LLMRouter** (`router.py`)：使用便宜/快速的模型（如 GPT-4o-mini、Gemini Flash）分析请求，根据 Elo 评分、定价和任务复杂度选择最优模型。返回带有推理过程的结构化 JSON。
-
-- **FastAPI 服务器** (`server.py`)：OpenAI 兼容的 `/v1/chat/completions` 端点，支持流式传输。处理 Gemini/Anthropic 的特定消息格式转换。
-
-- **上下文压缩** (`context_compressor.py`)：修剪对话历史以控制长智能体会话中的 token 使用。可通过 `max_history_tokens` 和 `keep_recent_exchanges` 配置。
-
-- **健康检查器** (`health_checker.py`)：后台任务，定期 ping 模型并将不健康的模型从路由决策中排除。
-
-- **重试处理器** (`retry_handler.py`)：速率限制或错误时自动切换到 ELO 相近的模型。所有模型失败时指数退避重试，与健康检查间隔关联。
-
-- **工具缓存** (`tool_cache.py`)：按会话缓存工具调用 ID 到模型的映射，使工具延续时可以绕过路由器以降低延迟。
-
-- **LiteLLM 集成**：所有提供商调用都通过 LiteLLM 进行，设置 `drop_params=True` 以自动处理 OpenAI、Anthropic 和 Gemini API 之间的兼容性。
+- 轻量级、自托管的在线运行时路由（运维负担更小）
+- 在同一服务内桥接多种 endpoint/API 风格
+- 可解释、可调的路由经济学（价格 + Elo + 任务匹配）
+- 面向 OpenClaw 的缓存与会话行为优化（如 Claude prompt caching 粘性）
 
 ## 开发
 
@@ -196,7 +203,7 @@ uv run pytest -q
 
 ## 文档
 
-- `docs/README.md`（文档索引）
+- `docs/README.md`
 - `docs/QUICKSTART.md`
 - `docs/API_STYLES.md`
 - `docs/QUICKSTART_API_STYLES.md`
@@ -204,4 +211,4 @@ uv run pytest -q
 
 ## 许可证
 
-GNU 通用公共许可证第 3 版，2007 年 6 月 29 日
+GNU GENERAL PUBLIC LICENSE Version 3, 29 June 2007

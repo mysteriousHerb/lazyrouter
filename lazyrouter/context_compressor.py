@@ -129,8 +129,7 @@ def _progressive_limit(
 def _auto_progressive_caps(config: Any, old_count: int) -> Tuple[int, int, int, int]:
     """Compute progressive caps for old messages/tool results.
 
-    Caps are derived from global history budget and old-message density, while
-    still allowing explicit config overrides.
+    Caps are derived from global history budget and old-message density.
     """
     budget = int(
         getattr(config, "max_history_tokens", DEFAULT_HISTORY_BUDGET)
@@ -149,21 +148,6 @@ def _auto_progressive_caps(config: Any, old_count: int) -> Tuple[int, int, int, 
     old_message_oldest = max(48, int(old_message_near * AUTO_CAP_OLDEST_MESSAGE_RATIO))
     old_tool_near = max(72, int(old_message_near * AUTO_CAP_TOOL_NEAR_RATIO))
     old_tool_oldest = max(32, int(old_message_oldest * AUTO_CAP_TOOL_OLDEST_RATIO))
-
-    # Backward-compatible manual overrides.
-    msg_near_override = getattr(config, "old_message_max_tokens", None)
-    msg_oldest_override = getattr(config, "oldest_message_max_tokens", None)
-    tool_near_override = getattr(config, "old_tool_result_max_tokens", None)
-    tool_oldest_override = getattr(config, "oldest_tool_result_max_tokens", None)
-
-    if isinstance(msg_near_override, int) and msg_near_override > 0:
-        old_message_near = msg_near_override
-    if isinstance(msg_oldest_override, int) and msg_oldest_override > 0:
-        old_message_oldest = msg_oldest_override
-    if isinstance(tool_near_override, int) and tool_near_override > 0:
-        old_tool_near = tool_near_override
-    if isinstance(tool_oldest_override, int) and tool_oldest_override > 0:
-        old_tool_oldest = tool_oldest_override
 
     old_message_oldest = min(old_message_oldest, old_message_near)
     old_tool_oldest = min(old_tool_oldest, old_tool_near)

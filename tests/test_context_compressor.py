@@ -7,10 +7,6 @@ def _cfg(**overrides):
     base = {
         "max_history_tokens": 16_000,
         "keep_recent_exchanges": 1,
-        "old_message_max_tokens": 24,
-        "oldest_message_max_tokens": 8,
-        "old_tool_result_max_tokens": 20,
-        "oldest_tool_result_max_tokens": 6,
     }
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -141,7 +137,7 @@ def test_compress_messages_drops_tool_calls_and_results_together():
     assert assistant_call_ids == tool_result_ids
 
 
-def test_compress_messages_auto_derives_caps_when_overrides_none():
+def test_compress_messages_auto_derives_caps():
     long_text = " ".join(["alpha"] * 400)
     messages = [
         {"role": "system", "content": "sys"},
@@ -152,13 +148,7 @@ def test_compress_messages_auto_derives_caps_when_overrides_none():
 
     compressed, stats = compress_messages(
         messages,
-        _cfg(
-            old_message_max_tokens=None,
-            oldest_message_max_tokens=None,
-            old_tool_result_max_tokens=None,
-            oldest_tool_result_max_tokens=None,
-            keep_recent_exchanges=1,
-        ),
+        _cfg(keep_recent_exchanges=1),
     )
 
     assert compressed[-1]["content"] == "recent request"

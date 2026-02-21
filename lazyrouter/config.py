@@ -87,18 +87,6 @@ class ContextCompressionConfig(BaseModel):
         16000  # hard message token budget (system prompt excluded)
     )
     keep_recent_exchanges: int = 3  # recent user turns kept untouched
-    old_message_max_tokens: Optional[int] = (
-        None  # optional override; auto-derived when unset
-    )
-    oldest_message_max_tokens: Optional[int] = (
-        None  # optional override; auto-derived when unset
-    )
-    old_tool_result_max_tokens: Optional[int] = (
-        None  # optional override; auto-derived when unset
-    )
-    oldest_tool_result_max_tokens: Optional[int] = (
-        None  # optional override; auto-derived when unset
-    )
     keep_recent_user_turns_in_chained_tool_calls: Optional[int] = (
         1  # overrides keep_recent_exchanges during tool-result continuation turns
     )
