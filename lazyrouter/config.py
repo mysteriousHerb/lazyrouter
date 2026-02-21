@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 
 import yaml
 from dotenv import find_dotenv, load_dotenv
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class ServeConfig(BaseModel):
@@ -40,6 +40,9 @@ class RouterConfig(BaseModel):
         None  # Number of recent messages to include (None = last user message only)
     )
     prompt: Optional[str] = None  # Custom routing prompt (overrides default)
+    cache_buffer_seconds: int = Field(
+        default=30, ge=0
+    )  # Safety buffer before cache TTL expires (default 30s)
 
     @model_validator(mode="after")
     def validate_prompt_placeholders(self) -> "RouterConfig":
@@ -71,6 +74,9 @@ class ModelConfig(BaseModel):
     output_price: Optional[float] = None  # Price per 1M output tokens
     coding_elo: Optional[int] = None  # LMSys Arena Elo rating for coding
     writing_elo: Optional[int] = None  # LMSys Arena Elo rating for writing
+    cache_ttl: Optional[int] = Field(
+        default=None, gt=0
+    )  # Cache TTL in minutes (e.g., 5 for Claude prompt caching)
 
 
 class ContextCompressionConfig(BaseModel):

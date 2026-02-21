@@ -6,6 +6,8 @@
   - `server.py` (API endpoints and app lifecycle)
   - `router.py` (model-selection logic)
   - `config.py` (YAML + env config loading/validation)
+  - `pipeline.py` (request processing pipeline with cache-aware routing)
+  - `cache_tracker.py` (prompt cache timestamp tracking for model stickiness)
   - `providers/` (provider adapters)
   - `models.py` (OpenAI-compatible request/response schemas)
   - supporting modules for logging, health checks, and context compression
@@ -49,3 +51,23 @@ Primary local checks: `GET /health`, `GET /v1/models`, `POST /v1/chat/completion
 - Never commit real API keys or secret values.
 - Prefer env var substitution in YAML (for example: `${OPENAI_API_KEY}`).
 - Verify new model/provider settings with `/v1/health-status` and `/v1/benchmark` before deployment.
+
+## Cache-Aware Routing (Prompt Cache Stickiness)
+- Models with `cache_ttl` configured (e.g., Claude with 5-minute prompt caching) benefit from cache-aware routing.
+- When a cacheable model is used, the system tracks cache creation time per session.
+- While cache is "hot" (< TTL - buffer), the router will:
+  - Stick to the cached model if routing suggests same or worse model (preserves cache hits)
+  - Upgrade to a better model if routing suggests significant improvement (based on ELO ratings)
+  - Never downgrade while cache is valid (avoids cache misses)
+- Once cache expires (>= TTL - buffer), routing proceeds freely without constraints.
+- Cache tracking is cleared on session reset (`/new` or `/reset` commands).
+- Configuration:
+  - `cache_ttl: 5` on model config for 5-minute prompt caching
+  - `cache_buffer_seconds: 30` in router config for safety buffer (default 30s)
+  - Example: With 5min TTL and 30s buffer, cache is hot for first 4:30
+
+## Agent Workflow
+- After each completed coding task, record progress and key findings in the Notion tracker using the `notion` skill.
+- Include at minimum: task summary, branch name, status, and notable findings/risks.
+- If work is partial, log it as `In Progress`; if finished and validated, log it as `Done`.
+- If Notion is temporarily unavailable, note the update in the chat response and retry logging on the next turn.
