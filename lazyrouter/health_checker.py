@@ -17,7 +17,8 @@ logger = logging.getLogger(__name__)
 
 BENCH_PROMPT = [{"role": "user", "content": "[lazyrouter-health-check] Say hi"}]
 BENCH_MAX_TOKENS = 16
-BENCH_TEMPERATURE = 0.0
+BENCH_TEMPERATURE_DEFAULT = 0.0
+BENCH_TEMPERATURE_GEMINI3 = 1.0
 HEALTH_CHECK_HEADER = {"X-LazyRouter-Request-Type": "health-check"}
 
 
@@ -77,6 +78,19 @@ def _chunk_has_text_delta(payload: Dict[str, Any]) -> bool:
             return True
 
     return False
+
+
+def _health_probe_temperature(provider: Any, actual_model: str) -> float:
+    """Choose health-probe temperature.
+
+    Gemini 3 models are probed with temperature=1.0 to avoid provider warnings
+    and known degraded behavior for sub-1.0 temperatures.
+    """
+    api_style = str(getattr(provider, "api_style", "")).strip().lower()
+    model_name = (actual_model or "").strip().lower()
+    if api_style == "gemini" and "gemini-3" in model_name:
+        return BENCH_TEMPERATURE_GEMINI3
+    return BENCH_TEMPERATURE_DEFAULT
 
 
 class LiteLLMWrapper:
@@ -153,13 +167,14 @@ async def check_model_health(
     ttft_unavailable_reason = None
     total_ms = None
     first_event_ms = None
+    probe_temperature = _health_probe_temperature(provider, actual_model)
     try:
         t0 = time.monotonic()
         stream = await provider.chat_completion(
             model=actual_model,
             messages=BENCH_PROMPT,
             stream=True,
-            temperature=BENCH_TEMPERATURE,
+            temperature=probe_temperature,
             max_tokens=BENCH_MAX_TOKENS,
         )
 
@@ -214,7 +229,7 @@ async def check_model_health(
                 model=actual_model,
                 messages=BENCH_PROMPT,
                 stream=False,
-                temperature=BENCH_TEMPERATURE,
+                temperature=probe_temperature,
                 max_tokens=BENCH_MAX_TOKENS,
             )
             total_ms = round((time.monotonic() - t0) * 1000, 1)

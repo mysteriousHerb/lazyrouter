@@ -1,16 +1,17 @@
 # ============================================================
-# LazyRouter Example Configuration (mainstream providers + ELO)
+# LazyRouter Example Configuration
 # ============================================================
+# Start here, then copy to config.yaml and adjust provider keys/models.
+# Environment variable placeholders (${...}) are resolved at startup.
 
 serve:
   host: "0.0.0.0"
   port: 1234
-  show_model_prefix: true  # Prepend assistant text with "[routed-model] ".
+  show_model_prefix: true  # Prefix assistant text with "[routed-model] ".
   debug: false
-  # api_key: "set-an-internal-key-if-you-want-to-protect-the-router"
+  # api_key: "optional-internal-key"  # If set, requests must pass Bearer token.
 
-# Providers map names -> credentials/endpoints.
-# API keys are pulled from `.env` via ${...} substitution.
+# Providers are named endpoints. llms.*.provider and router.provider reference keys here.
 providers:
   openai:
     api_key: "${OPENAI_API_KEY}"
@@ -18,7 +19,6 @@ providers:
 
   anthropic:
     api_key: "${ANTHROPIC_API_KEY}"
-    base_url: "https://api.anthropic.com"
     api_style: anthropic
 
   gemini:
@@ -30,29 +30,42 @@ providers:
     base_url: "https://openrouter.ai/api"
     api_style: openai-completions
 
-# Router LLM decides which model to use.
+  # Example for any OpenAI-compatible gateway/proxy.
+  # Note: any api_style that is not "anthropic" or "gemini" is treated as OpenAI-compatible.
+  # custom_openai_gateway:
+  #   api_key: "${CUSTOM_GATEWAY_API_KEY}"
+  #   base_url: "https://api.example.com"
+  #   api_style: openai-responses
+
 router:
   provider: gemini
   model: "gemini-2.5-flash"
-  input_price: 0.5
-  output_price: 3.0
+  temperature: 0.0
+  input_price: 0.5   # Optional metadata ($/1M) for router model reference.
+  output_price: 3.0  # Optional metadata ($/1M) for router model reference.
   context_messages: 10
-  # prompt: |  # Optional: override the default routing prompt
+  # Number of recent messages the router model sees when choosing llms.
+  # Higher = better context-aware routing, but extra routing token cost.
+
+  cache_buffer_seconds: 30
+  # Safety margin before cache_ttl expiry. With cache_ttl=5 and buffer=30,
+  # cache stickiness is considered hot for the first 4m30s.
+
+  # Optional custom router prompt.
+  # Must include: {model_descriptions}, {context}, {current_request}
+  # prompt: |
   #   You are a model router. Select the best model for the user's request.
-  #   If the user explicitly requests a specific model, honor that request.
   #   Available models: {model_descriptions}
   #   Context: {context}
   #   Current request: {current_request}
   #   Respond with reasoning and model choice.
 
-# Models that can be selected at runtime.
-# ELO source suggestion: https://arena.ai/leaderboard
-# - coding_elo: relative coding quality signal (higher is generally better)
-# - writing_elo: relative writing quality signal (higher is generally better)
-# ELO is optional for runtime, but useful for consistent routing preferences.
+# Candidate runtime models.
+# Prices are per 1M tokens. Elo values are relative quality signals.
+# Source suggestion for Elo: https://arena.ai/leaderboard
 llms:
   gemini-2.5-flash:
-    description: "Very fast, cheap, and capable for most conversations and tool calling."
+    description: "Very fast and cost-effective default for most turns."
     provider: gemini
     model: "gemini-2.5-flash"
     input_price: 0.5
@@ -61,7 +74,7 @@ llms:
     writing_elo: 1472
 
   gemini-2.5-pro:
-    description: "More capable Gemini model for complex reasoning and coding."
+    description: "Higher quality for complex reasoning or difficult coding."
     provider: gemini
     model: "gemini-2.5-pro"
     input_price: 2.0
@@ -69,26 +82,30 @@ llms:
     coding_elo: 1449
     writing_elo: 1486
 
-  claude-sonnet-4-5:
-    description: "Balanced quality model for coding and writing."
+  claude-sonnet:
+    description: "Balanced quality model; good coding/writing tradeoff."
     provider: anthropic
     model: "claude-3-5-sonnet-latest"
     input_price: 3.0
     output_price: 15.0
     coding_elo: 1386
     writing_elo: 1451
+    cache_ttl: 5
+    # Enables cache-aware stickiness for this model (minutes).
+    # Useful for OpenClaw/agent flows with repeated long prefixes.
 
-  claude-opus-4-6:
-    description: "High-quality model for difficult tasks; use when quality matters most."
+  claude-opus:
+    description: "Top-tier quality for high-stakes reasoning tasks."
     provider: anthropic
     model: "claude-opus-4-6"
     input_price: 5.0
     output_price: 25.0
     coding_elo: 1569
     writing_elo: 1501
+    cache_ttl: 5
 
   gpt-4o-mini:
-    description: "Fast and cost-effective OpenAI baseline."
+    description: "Fast OpenAI baseline."
     provider: openai
     model: "gpt-4o-mini"
     input_price: 0.15
@@ -96,8 +113,8 @@ llms:
     coding_elo: 1300
     writing_elo: 1400
 
-  openrouter-grok-4-fast:
-    description: "OpenRouter route for fast reasoning at moderate cost."
+  openrouter-grok-fast:
+    description: "OpenRouter route for low-latency reasoning."
     provider: openrouter
     model: "x-ai/grok-4-fast-reasoning"
     input_price: 0.8
@@ -106,13 +123,31 @@ llms:
     writing_elo: 1431
 
 context_compression:
-  history_trimming: true  # Master switch for deterministic history trimming.
-  max_history_tokens: 10000  # Hard token budget for message history (system prompt excluded).
-  keep_recent_exchanges: 8  # Preserve newest user-assistant exchanges uncompressed.
-  keep_recent_user_turns_in_chained_tool_calls: 1  # Keep this many recent user turns untouched during chained tool calls.
-  skip_router_on_tool_results: true  # Reuse previous selected model on tool-result follow-ups.
+  history_trimming: true
+  # Master switch for deterministic message compression.
+
+  max_history_tokens: 10000
+  # Hard history budget (system/developer prompts excluded).
+
+  keep_recent_exchanges: 8
+  # Keep this many latest user turns untouched; older turns are progressively trimmed.
+
+  keep_recent_user_turns_in_chained_tool_calls: 1
+  # During chained tool-result turns, protect this many recent user turns from compression.
+
+  skip_router_on_tool_results: true
+  # On tool-result continuation turns, reuse previous model to avoid extra router calls.
+
+  # llm_summarize: false
+  # summary_max_tokens: 500
+  # Reserved for future LLM-based summarization path (not yet implemented).
 
 health_check:
-  interval: 300          # active interval in seconds while requests are flowing (default: 300)
-  idle_after_seconds: 600  # after this much inactivity, pause background checks (default: 300)
-  max_latency_ms: 15000  # models slower than this are unhealthy (default: 10000)
+  interval: 300
+  # Active check cadence (seconds) while traffic is flowing.
+
+  idle_after_seconds: 600
+  # Pause background checks after this much request inactivity.
+
+  max_latency_ms: 15000
+  # If model probe latency exceeds this threshold, model is treated as unhealthy.
