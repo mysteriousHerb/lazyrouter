@@ -23,8 +23,6 @@ def mock_config():
         router=RouterConfig(
             provider="test_provider",
             model="test-router-model",
-            input_price=0.1,
-            output_price=0.1,
         ),
         providers={
             "test_provider": ProviderConfig(
@@ -411,8 +409,6 @@ async def test_non_cacheable_selection_clears_previous_cache_entry():
         router=RouterConfig(
             provider="test_provider",
             model="test-router-model",
-            input_price=0.1,
-            output_price=0.1,
         ),
         providers={
             "test_provider": ProviderConfig(

@@ -68,8 +68,6 @@ providers:
 router:
   provider: openrouter
   model: "gpt-4o-mini"
-  input_price: 0.15
-  output_price: 0.60
 
 llms:
   gemini-flash:
