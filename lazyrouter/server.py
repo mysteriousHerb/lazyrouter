@@ -439,6 +439,10 @@ def create_app(
                 )
             elif ctx.compression_stats:
                 parts.append(f"history: {ctx.compression_stats['compressed_tokens']}")
+            log_tag = "routing"
+            if ctx.router_skipped_reason:
+                log_tag = "routing-skip"
+                parts.append(f"skip: {ctx.router_skipped_reason}")
             if ctx.routing_reasoning:
                 truncated = ctx.routing_reasoning[:ROUTING_REASON_LOG_PREVIEW_CHARS]
                 suffix = (
@@ -447,7 +451,7 @@ def create_app(
                     else ""
                 )
                 parts.append(f"why: {truncated}{suffix}")
-            logger.info(f"[routing] {' | '.join(parts)}")
+            logger.info(f"[{log_tag}] {' | '.join(parts)}")
 
             start_time = time.monotonic()
             response = await call_with_fallback(ctx, router, health_checker)

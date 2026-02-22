@@ -118,7 +118,7 @@ def log_exchange(
         logger.warning("Failed to write exchange log (%s): %s", log_path, log_error)
         return
 
-    logger.info(
+    logger.debug(
         "[exchange] label=%s id=%s stream=%s latency=%.0fms",
         label,
         request_id[:8],

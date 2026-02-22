@@ -33,6 +33,8 @@ class RouterConfig(BaseModel):
 
     provider: str
     model: str
+    provider_fallback: Optional[str] = None
+    model_fallback: Optional[str] = None
     temperature: float = 0.0
     context_messages: Optional[int] = (
         None  # Number of recent messages to include (None = last user message only)
@@ -54,6 +56,11 @@ class RouterConfig(BaseModel):
     @model_validator(mode="after")
     def validate_prompt_placeholders(self) -> "RouterConfig":
         """Validate that custom prompt contains required placeholders"""
+        if (self.provider_fallback is None) != (self.model_fallback is None):
+            raise ValueError(
+                "router.provider_fallback and router.model_fallback must be set together"
+            )
+
         if self.prompt is not None:
             required_placeholders = {"model_descriptions", "context", "current_request"}
             # Check if all required placeholders are present
@@ -246,6 +253,13 @@ def load_config(
     if config.router.provider not in config.providers:
         raise ValueError(
             f"Router provider '{config.router.provider}' not found in providers"
+        )
+    if (
+        config.router.provider_fallback
+        and config.router.provider_fallback not in config.providers
+    ):
+        raise ValueError(
+            f"Router fallback provider '{config.router.provider_fallback}' not found in providers"
         )
 
     return config

@@ -180,6 +180,17 @@ Context: {context}"""
     assert "placeholder" in error_msg.lower()
 
 
+def test_router_fallback_config_requires_provider_and_model_together():
+    """Router fallback config must set provider/model as a pair."""
+    with pytest.raises(ValueError) as exc_info:
+        RouterConfig(
+            provider="test",
+            model="test-model",
+            provider_fallback="backup",
+        )
+    assert "provider_fallback" in str(exc_info.value)
+
+
 def test_router_uses_custom_prompt_during_routing():
     """Verify that custom prompt is actually used when calling route()"""
     custom_prompt = """CUSTOM PROMPT TEST:
@@ -230,6 +241,60 @@ Request: {current_request}"""
             # Check that our custom prompt marker is in the actual prompt
             assert "CUSTOM PROMPT TEST:" in prompt_content
             assert "model-a" in result.model
+
+    asyncio.run(run_test())
+
+
+def test_router_uses_fallback_backend_when_primary_router_fails():
+    """Route should use configured fallback router backend when primary raises."""
+    cfg = Config(
+        serve=ServeConfig(),
+        router=RouterConfig(
+            provider="primary",
+            model="primary-router-model",
+            provider_fallback="backup",
+            model_fallback="backup-router-model",
+        ),
+        providers={
+            "primary": ProviderConfig(api_key="primary-key", api_style="openai"),
+            "backup": ProviderConfig(api_key="backup-key", api_style="openai"),
+        },
+        llms={
+            "model-a": ModelConfig(
+                provider="primary",
+                model="model-a",
+                description="Test model A",
+            )
+        },
+        health_check=HealthCheckConfig(interval=300, max_latency_ms=10000),
+    )
+
+    router = LLMRouter(cfg)
+
+    ok_response = AsyncMock()
+    ok_response.model_dump.return_value = {
+        "id": "test-id",
+        "choices": [
+            {
+                "message": {"content": '{"reasoning":"fallback ok","model":"model-a"}'},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+    async def run_test():
+        with patch(
+            "litellm.acompletion",
+            side_effect=[Exception("primary router down"), ok_response],
+        ) as mock_completion:
+            result = await router.route([{"role": "user", "content": "Route this"}])
+            assert result.model == "model-a"
+            assert mock_completion.call_count == 2
+
+            first_model = mock_completion.call_args_list[0].kwargs["model"]
+            second_model = mock_completion.call_args_list[1].kwargs["model"]
+            assert first_model.endswith("primary-router-model")
+            assert second_model.endswith("backup-router-model")
 
     asyncio.run(run_test())
 

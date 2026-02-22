@@ -34,6 +34,8 @@ providers:
 router:
   provider: gemini
   model: "gemini-2.5-flash"
+  # provider_fallback: openai
+  # model_fallback: "gpt-4o-mini"
   context_messages: 10
   cache_estimated_minutes_per_message: 2.0  # Conservative cache-cost estimate cadence
   cache_create_input_multiplier: 1.25  # Estimated input cost multiplier on cache-create turn

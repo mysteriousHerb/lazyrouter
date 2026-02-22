@@ -80,6 +80,8 @@ class LLMRouter:
         # Get routing model configuration
         self.routing_model = config.router.model
         self.routing_provider = config.router.provider
+        self.routing_fallback_model = config.router.model_fallback
+        self.routing_fallback_provider = config.router.provider_fallback
         self.routing_temperature = config.router.temperature
 
         # Initialize routing logger
@@ -95,6 +97,25 @@ class LLMRouter:
     def _build_routing_params(self) -> dict:
         """Build LiteLLM params for routing model from router config directly."""
         return self._get_litellm_params(self.routing_provider, self.routing_model)
+
+    def _get_routing_backends(self) -> List[tuple[str, str, str]]:
+        """Return ordered routing backend candidates as (label, provider, model)."""
+        backends: List[tuple[str, str, str]] = [
+            ("primary", self.routing_provider, self.routing_model)
+        ]
+        if self.routing_fallback_provider and self.routing_fallback_model:
+            if not (
+                self.routing_fallback_provider == self.routing_provider
+                and self.routing_fallback_model == self.routing_model
+            ):
+                backends.append(
+                    (
+                        "fallback",
+                        self.routing_fallback_provider,
+                        self.routing_fallback_model,
+                    )
+                )
+        return backends
 
     # Backward-compatible alias for existing tests/callers.
     def _create_routing_provider(self) -> dict:
@@ -335,10 +356,6 @@ class LLMRouter:
         # Call routing model
         try:
             routing_messages = [{"role": "user", "content": routing_prompt}]
-            logger.debug("[router-call] model=%s", self.routing_model)
-
-            routing_params = self._build_routing_params()
-
             # Define JSON schema for structured output
             schema_name = "model_selection"
             schema_properties = {
@@ -364,18 +381,50 @@ class LLMRouter:
                 },
             }
 
-            # Call routing model via LiteLLM (non-streaming)
-            routing_params.update(
-                {
-                    "messages": routing_messages,
-                    "stream": False,
-                    "temperature": self.routing_temperature,
-                    "response_format": response_format,
-                }
-            )
+            response = None
+            response_dict = None
+            last_call_error: Optional[Exception] = None
+            routing_backends = self._get_routing_backends()
+            for backend_label, provider_name, backend_model in routing_backends:
+                logger.debug(
+                    "[router-call] backend=%s provider=%s model=%s",
+                    backend_label,
+                    provider_name,
+                    backend_model,
+                )
+                routing_params = self._get_litellm_params(provider_name, backend_model)
+                routing_params.update(
+                    {
+                        "messages": routing_messages,
+                        "stream": False,
+                        "temperature": self.routing_temperature,
+                        "response_format": response_format,
+                    }
+                )
+                try:
+                    response = await litellm.acompletion(**routing_params)
+                    response_dict = response.model_dump(exclude_none=True)
+                    if backend_label == "fallback":
+                        logger.warning(
+                            "[router-call] primary failed; routed with fallback router provider=%s model=%s",
+                            provider_name,
+                            backend_model,
+                        )
+                    break
+                except Exception as call_error:
+                    last_call_error = call_error
+                    if backend_label == "primary" and len(routing_backends) > 1:
+                        logger.warning(
+                            "[router-call] primary router failed: %s; trying configured fallback router",
+                            call_error,
+                        )
+                        continue
+                    raise
 
-            response = await litellm.acompletion(**routing_params)
-            response_dict = response.model_dump(exclude_none=True)
+            if response_dict is None:
+                if last_call_error is not None:
+                    raise last_call_error
+                raise RuntimeError("Router call failed without a response")
 
             # Extract response
             raw_content = response_dict["choices"][0]["message"]["content"]

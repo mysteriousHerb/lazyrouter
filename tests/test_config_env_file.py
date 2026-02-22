@@ -84,3 +84,35 @@ def test_load_config_uses_cwd_dotenv_by_default(tmp_path, monkeypatch):
 
     config = load_config(str(config_file))
     assert config.providers["openai"].api_key == "from_cwd"
+
+
+def test_load_config_rejects_missing_router_fallback_provider(tmp_path):
+    """Router fallback provider must exist in providers config."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        textwrap.dedent(
+            """
+            serve:
+              host: "0.0.0.0"
+              port: 8000
+            router:
+              provider: "openai"
+              model: "fast"
+              provider_fallback: "backup"
+              model_fallback: "fallback-fast"
+            providers:
+              openai:
+                api_key: "abc"
+            llms:
+              fast:
+                provider: "openai"
+                model: "gpt-4o-mini"
+                description: "Fast model"
+            """
+        ).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Router fallback provider 'backup' not found"):
+        load_config(str(config_file))

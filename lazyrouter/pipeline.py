@@ -170,15 +170,47 @@ def _strip_model_prefixes_from_history(messages: list, known_models: set) -> lis
     if not known_models:
         return messages
     prefix_re = _build_prefix_re(known_models)
+
+    def _strip_prefixes(text: str) -> str:
+        stripped = text
+        while prefix_re.match(stripped):
+            stripped = prefix_re.sub("", stripped, count=1)
+        return stripped
+
     result = []
     for msg in messages:
         if msg.get("role") == "assistant":
             content = msg.get("content")
-            if isinstance(content, str) and prefix_re.match(content):
-                msg = dict(msg)
-                while prefix_re.match(content):
-                    content = prefix_re.sub("", content)
-                msg["content"] = content
+            if isinstance(content, str):
+                stripped = _strip_prefixes(content)
+                if stripped != content:
+                    msg = dict(msg)
+                    msg["content"] = stripped
+            elif isinstance(content, list):
+                parts_copy = None
+                for idx, part in enumerate(content):
+                    if not isinstance(part, dict):
+                        continue
+                    if part.get("type") != "text":
+                        continue
+                    part_text = part.get("text")
+                    if not isinstance(part_text, str):
+                        continue
+                    stripped = _strip_prefixes(part_text)
+                    if stripped != part_text:
+                        if parts_copy is None:
+                            parts_copy = []
+                            for original_part in content:
+                                if isinstance(original_part, dict):
+                                    parts_copy.append(dict(original_part))
+                                else:
+                                    parts_copy.append(original_part)
+                        parts_copy[idx]["text"] = stripped
+                    # Only the first text part can carry a leading model prefix.
+                    break
+                if parts_copy is not None:
+                    msg = dict(msg)
+                    msg["content"] = parts_copy
         result.append(msg)
     return result
 
