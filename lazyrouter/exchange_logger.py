@@ -76,6 +76,7 @@ def log_exchange(
     label: str,
     request_id: str,
     request_data: Dict[str, Any],
+    request_effective_data: Optional[Dict[str, Any]],
     response_data: Any,
     latency_ms: float,
     is_stream: bool,
@@ -89,6 +90,7 @@ def log_exchange(
         label: Log file label (e.g. api_style for proxy, 'server' for normal server).
         request_id: Unique request identifier.
         request_data: The request payload dict.
+        request_effective_data: Optional processed request payload (e.g. trimmed/sanitized).
         response_data: The response payload (dict or None).
         latency_ms: Round-trip latency in milliseconds.
         is_stream: Whether the request was streamed.
@@ -103,10 +105,12 @@ def log_exchange(
         "is_stream": is_stream,
         "latency_ms": round(latency_ms, 2),
         "request": _sanitize_exchange_payload(request_data),
-        "request_headers": _redact_headers(request_headers) if request_headers else None,
-        "response": _sanitize_exchange_payload(response_data),
-        "error": error,
     }
+    if request_effective_data is not None:
+        entry["request_effective"] = _sanitize_exchange_payload(request_effective_data)
+    entry["request_headers"] = _redact_headers(request_headers) if request_headers else None
+    entry["response"] = _sanitize_exchange_payload(response_data)
+    entry["error"] = error
     if extra:
         entry["extra"] = sanitize_for_log(extra)
 

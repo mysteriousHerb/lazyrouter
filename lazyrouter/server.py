@@ -99,6 +99,28 @@ def _get_first_response_message(response: Dict[str, Any]) -> Dict[str, Any] | No
     return message
 
 
+def _build_effective_request_for_log(ctx: "RequestContext") -> Dict[str, Any]:
+    """Build effective request payload after normalization/compression/provider prep."""
+    request = ctx.request
+    effective: Dict[str, Any] = {
+        "model": ctx.selected_model,
+        "provider_api_style": ctx.provider_api_style,
+        "messages": ctx.provider_messages,
+        "stream": request.stream,
+        "temperature": request.temperature,
+        "max_tokens": ctx.effective_max_tokens,
+        "message_count_raw": len(request.messages),
+        "message_count_effective": len(ctx.provider_messages),
+    }
+    if ctx.provider_kwargs:
+        effective.update(ctx.provider_kwargs)
+    if ctx.extra_kwargs:
+        effective.update(ctx.extra_kwargs)
+    if ctx.compression_stats:
+        effective["compression_stats"] = ctx.compression_stats
+    return effective
+
+
 async def _logged_stream(
     ctx: "RequestContext",
     response: Any,
@@ -257,6 +279,7 @@ async def _logged_stream(
         "server",
         request_id,
         ctx.request.model_dump(exclude_none=True),
+        _build_effective_request_for_log(ctx),
         None,
         latency_ms,
         True,
@@ -470,6 +493,7 @@ def create_app(
                     "server",
                     result.get("id", "unknown"),
                     request.model_dump(exclude_none=True),
+                    _build_effective_request_for_log(ctx),
                     result,
                     latency_ms,
                     False,
