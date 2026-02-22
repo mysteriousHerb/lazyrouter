@@ -46,6 +46,8 @@ INTERNAL_PARAM_KEYS = {
 ROUTING_PROMPT_TEMPLATE = """You are a model router. Analyze the user's query and select the most appropriate model.
 
 Each model has an Elo rating from LMSys Chatbot Arena (higher = better quality) for coding and writing, plus pricing per 1M tokens.
+When provided, est_cached_input_price already includes a conservative cache-adjusted input-cost estimate.
+For multi-turn cost comparisons, prioritize est_cached_input_price over raw input_price.
 Prefer cheaper models for simple tasks. Only pick expensive, high-Elo models when the task genuinely needs top-tier quality.
 
 IMPORTANT: If the user explicitly requests a specific model (e.g., "use opus for this", "route to gemini-2.5-pro", "switch to claude-sonnet"), honor that request directly.
@@ -98,6 +100,32 @@ class LLMRouter:
     def _create_routing_provider(self) -> dict:
         return self._build_routing_params()
 
+    def _estimate_cached_input_price(self, model_config: ModelConfig) -> Optional[float]:
+        """Estimate effective input price using conservative cache assumptions."""
+        if model_config.input_price is None or model_config.cache_ttl is None:
+            return None
+
+        seconds_per_message = (
+            self.config.router.cache_estimated_minutes_per_message * 60.0
+        )
+        hot_window_seconds = (
+            model_config.cache_ttl * 60
+        ) - self.config.router.cache_buffer_seconds
+        hot_hits = (
+            int(hot_window_seconds // seconds_per_message)
+            if hot_window_seconds > 0 and seconds_per_message > 0
+            else 0
+        )
+
+        total_turns = 1 + hot_hits
+        cache_create_input_multiplier = self.config.router.cache_create_input_multiplier
+        cache_hit_input_multiplier = self.config.router.cache_hit_input_multiplier
+        effective_multiplier = (
+            cache_create_input_multiplier
+            + (hot_hits * cache_hit_input_multiplier)
+        ) / total_turns
+        return model_config.input_price * effective_multiplier
+
     def _build_model_descriptions(self, exclude_models: Optional[set] = None) -> str:
         """Build formatted string of model descriptions for routing prompt"""
         descriptions = []
@@ -114,6 +142,16 @@ class LLMRouter:
                 meta.append(f"input_price=${model_config.input_price}/1M tokens")
             if model_config.output_price is not None:
                 meta.append(f"output_price=${model_config.output_price}/1M tokens")
+            if model_config.cache_ttl is not None:
+                meta.append(f"cache_ttl={model_config.cache_ttl}min")
+                est_cached_input_price = self._estimate_cached_input_price(model_config)
+                if est_cached_input_price is not None:
+                    cadence = self.config.router.cache_estimated_minutes_per_message
+                    meta.append(
+                        "est_cached_input_price="
+                        f"${est_cached_input_price:.3f}/1M "
+                        f"(@~{cadence:.1f}min/msg)"
+                    )
             if meta:
                 parts.append(f"  [{', '.join(meta)}]")
             descriptions.append("".join(parts))

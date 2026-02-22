@@ -35,6 +35,9 @@ router:
   provider: gemini
   model: "gemini-2.5-flash"
   context_messages: 10
+  cache_estimated_minutes_per_message: 2.0  # Conservative cache-cost estimate cadence
+  cache_create_input_multiplier: 1.25  # Estimated input cost multiplier on cache-create turn
+  cache_hit_input_multiplier: 0.10  # Estimated input cost multiplier on cache-hit turns
   # prompt: |  # Optional: override the default routing prompt
   #   You are a model router. Select the best model for the user's request.
   #   If the user explicitly requests a specific model, honor that request.
