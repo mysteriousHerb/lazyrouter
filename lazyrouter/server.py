@@ -38,6 +38,7 @@ logging.basicConfig(
 # duplicate lines (one LiteLLM-formatted + one root-formatted).
 logging.getLogger("LiteLLM").propagate = False
 logger = logging.getLogger(__name__)
+ROUTING_REASON_LOG_PREVIEW_CHARS = 140
 
 # Global config and router (initialized in create_app)
 config: Config = None
@@ -439,8 +440,12 @@ def create_app(
             elif ctx.compression_stats:
                 parts.append(f"history: {ctx.compression_stats['compressed_tokens']}")
             if ctx.routing_reasoning:
-                truncated = ctx.routing_reasoning[:80]
-                suffix = "..." if len(ctx.routing_reasoning) > 80 else ""
+                truncated = ctx.routing_reasoning[:ROUTING_REASON_LOG_PREVIEW_CHARS]
+                suffix = (
+                    "..."
+                    if len(ctx.routing_reasoning) > ROUTING_REASON_LOG_PREVIEW_CHARS
+                    else ""
+                )
                 parts.append(f"why: {truncated}{suffix}")
             logger.info(f"[routing] {' | '.join(parts)}")
 
