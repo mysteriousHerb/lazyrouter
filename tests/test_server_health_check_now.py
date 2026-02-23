@@ -122,6 +122,68 @@ def test_health_check_now_triggers_a_new_refresh_each_call(monkeypatch):
     assert second.json()["last_check"] == "run-2"
 
 
+def test_health_status_includes_router_result_when_present(monkeypatch):
+    monkeypatch.setattr(server_mod.HealthChecker, "start", lambda _: None)
+    monkeypatch.setattr(server_mod.HealthChecker, "stop", lambda _: None)
+
+    async def _fake_run_check(self):
+        self.last_results = {
+            "m_fast": HealthCheckResult(
+                model="m_fast",
+                provider="p1",
+                actual_model="provider-fast",
+                status="ok",
+                is_healthy=True,
+                total_ms=11.0,
+            ),
+            "m_slow": HealthCheckResult(
+                model="m_slow",
+                provider="p1",
+                actual_model="provider-slow",
+                status="error",
+                is_healthy=False,
+                error="fail",
+            ),
+        }
+        self.last_router_result = HealthCheckResult(
+            model="m_fast",
+            provider="p1",
+            actual_model="m_fast",
+            is_router=True,
+            status="ok",
+            is_healthy=True,
+            ttft_ms=4.0,
+            total_ms=9.0,
+        )
+        self.healthy_models = {"m_fast"}
+        self.last_check = "2026-02-21T00:00:00+00:00"
+        return [*self.last_results.values(), self.last_router_result]
+
+    monkeypatch.setattr(server_mod.HealthChecker, "run_check", _fake_run_check)
+
+    app = server_mod.create_app(preloaded_config=_config())
+    with TestClient(app) as client:
+        health_check_response = client.get("/v1/health-check")
+        health_status_response = client.get("/v1/health-status")
+
+    assert health_check_response.status_code == 200
+    assert health_status_response.status_code == 200
+
+    health_check_body = health_check_response.json()
+    health_status_body = health_status_response.json()
+    assert len(health_check_body["results"]) == 3
+    assert len(health_status_body["results"]) == 3
+
+    check_router_results = [r for r in health_check_body["results"] if r["is_router"]]
+    status_router_results = [r for r in health_status_body["results"] if r["is_router"]]
+    assert len(check_router_results) == 1
+    assert len(status_router_results) == 1
+    assert check_router_results[0]["model"] == "m_fast"
+    assert check_router_results[0]["total_ms"] == 9.0
+    assert status_router_results[0]["model"] == "m_fast"
+    assert status_router_results[0]["total_ms"] == 9.0
+
+
 def test_chat_completion_calls_idle_preflight_hook(monkeypatch):
     monkeypatch.setattr(server_mod.HealthChecker, "start", lambda _: None)
     monkeypatch.setattr(server_mod.HealthChecker, "stop", lambda _: None)

@@ -12,7 +12,9 @@ from .error_logger import sanitize_for_log
 logger = logging.getLogger(__name__)
 
 _LOG_DIR = Path("logs/server")
-_LOG_MESSAGE_CONTENT = os.getenv("LAZYROUTER_LOG_MESSAGE_CONTENT", "1").strip().lower() not in {
+_LOG_MESSAGE_CONTENT = os.getenv(
+    "LAZYROUTER_LOG_MESSAGE_CONTENT", "1"
+).strip().lower() not in {
     "0",
     "false",
     "no",
@@ -79,6 +81,7 @@ def log_exchange(
     response_data: Any,
     latency_ms: float,
     is_stream: bool,
+    request_effective_data: Optional[Dict[str, Any]] = None,
     error: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
     request_headers: Optional[Dict[str, str]] = None,
@@ -92,6 +95,7 @@ def log_exchange(
         response_data: The response payload (dict or None).
         latency_ms: Round-trip latency in milliseconds.
         is_stream: Whether the request was streamed.
+        request_effective_data: Optional processed request payload (e.g. trimmed/sanitized).
         error: Optional error string if the request failed.
         extra: Optional extra fields to include (e.g. routing metadata).
         request_headers: Optional request headers (sensitive values will be redacted).
@@ -103,10 +107,14 @@ def log_exchange(
         "is_stream": is_stream,
         "latency_ms": round(latency_ms, 2),
         "request": _sanitize_exchange_payload(request_data),
-        "request_headers": _redact_headers(request_headers) if request_headers else None,
-        "response": _sanitize_exchange_payload(response_data),
-        "error": error,
     }
+    if request_effective_data is not None:
+        entry["request_effective"] = _sanitize_exchange_payload(request_effective_data)
+    entry["request_headers"] = (
+        _redact_headers(request_headers) if request_headers else None
+    )
+    entry["response"] = _sanitize_exchange_payload(response_data)
+    entry["error"] = error
     if extra:
         entry["extra"] = sanitize_for_log(extra)
 

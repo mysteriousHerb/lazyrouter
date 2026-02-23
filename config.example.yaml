@@ -8,6 +8,8 @@ serve:
   show_model_prefix: true  # Prepend assistant text with "[routed-model] ".
   debug: false
   # api_key: "set-an-internal-key-if-you-want-to-protect-the-router"
+  # Exchange logs always include full request metadata; message bodies can be redacted via env:
+  # LAZYROUTER_LOG_MESSAGE_CONTENT=0
 
 # Providers map names -> credentials/endpoints.
 # API keys are pulled from `.env` via ${...} substitution.
@@ -34,9 +36,12 @@ providers:
 router:
   provider: gemini
   model: "gemini-2.5-flash"
-  input_price: 0.5
-  output_price: 3.0
+  # provider_fallback: openai
+  # model_fallback: "gpt-4o-mini"
   context_messages: 10
+  cache_estimated_minutes_per_message: 2.0  # Conservative cache-cost estimate cadence
+  cache_create_input_multiplier: 1.25  # Estimated input cost multiplier on cache-create turn (> 0)
+  cache_hit_input_multiplier: 0.10  # Estimated input cost multiplier on cache-hit turns
   # prompt: |  # Optional: override the default routing prompt
   #   You are a model router. Select the best model for the user's request.
   #   If the user explicitly requests a specific model, honor that request.
@@ -73,6 +78,8 @@ llms:
     description: "Balanced quality model for coding and writing."
     provider: anthropic
     model: "claude-3-5-sonnet-latest"
+    # cache_ttl: 5  # 5-minute prompt caching window (enables cache-aware estimation)
+    # input_price: 3.0  # With cache_ttl set, router also computes est_cached_input_price
     input_price: 3.0
     output_price: 15.0
     coding_elo: 1386

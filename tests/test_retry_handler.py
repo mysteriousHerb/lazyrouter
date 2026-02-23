@@ -1,6 +1,5 @@
 """Tests for retry handler functionality"""
 
-
 from lazyrouter.config import ModelConfig
 from lazyrouter.retry_handler import (
     get_model_elo,

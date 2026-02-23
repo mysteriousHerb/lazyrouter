@@ -38,6 +38,7 @@ logging.basicConfig(
 # duplicate lines (one LiteLLM-formatted + one root-formatted).
 logging.getLogger("LiteLLM").propagate = False
 logger = logging.getLogger(__name__)
+ROUTING_REASON_LOG_PREVIEW_CHARS = 140
 
 # Global config and router (initialized in create_app)
 config: Config = None
@@ -96,6 +97,28 @@ def _get_first_response_message(response: Dict[str, Any]) -> Dict[str, Any] | No
     if not isinstance(message, dict):
         return None
     return message
+
+
+def _build_effective_request_for_log(ctx: "RequestContext") -> Dict[str, Any]:
+    """Build effective request payload after normalization/compression/provider prep."""
+    request = ctx.request
+    effective: Dict[str, Any] = {
+        "model": ctx.selected_model,
+        "provider_api_style": ctx.provider_api_style,
+        "messages": ctx.provider_messages,
+        "stream": request.stream,
+        "temperature": request.temperature,
+        "max_tokens": ctx.effective_max_tokens,
+        "message_count_raw": len(request.messages),
+        "message_count_effective": len(ctx.provider_messages),
+    }
+    if ctx.provider_kwargs:
+        effective["provider_kwargs"] = dict(ctx.provider_kwargs)
+    if ctx.extra_kwargs:
+        effective["extra_kwargs"] = dict(ctx.extra_kwargs)
+    if ctx.compression_stats:
+        effective["compression_stats"] = ctx.compression_stats
+    return effective
 
 
 async def _logged_stream(
@@ -179,11 +202,17 @@ async def _logged_stream(
                                 tname = str(fn.get("name", "")).strip()
                                 if tcid:
                                     existing = next(
-                                        (t for t in streamed_tool_calls if t.get("id") == tcid),
+                                        (
+                                            t
+                                            for t in streamed_tool_calls
+                                            if t.get("id") == tcid
+                                        ),
                                         None,
                                     )
                                     if existing is None:
-                                        streamed_tool_calls.append({"id": tcid, "name": tname})
+                                        streamed_tool_calls.append(
+                                            {"id": tcid, "name": tname}
+                                        )
                                     elif tname and not existing.get("name"):
                                         existing["name"] = tname
                                 if tname:
@@ -202,19 +231,23 @@ async def _logged_stream(
             break
         except Exception as stream_err:
             err_text = str(stream_err)
-            did_retry, err_text, retried_gemini_tool_schema, retried_gemini_tool_schema_camel, retried_gemini_without_tools = (
-                await apply_gemini_stream_retries(
-                    replace_stream_fn=_replace_stream,
-                    extra_kwargs=ctx.extra_kwargs,
-                    request=request,
-                    provider_api_style=ctx.provider_api_style,
-                    is_tool_continuation_turn=ctx.is_tool_continuation_turn,
-                    err_text=err_text,
-                    emitted_chunks=emitted_chunks,
-                    retried_tool_schema=retried_gemini_tool_schema,
-                    retried_tool_schema_camel=retried_gemini_tool_schema_camel,
-                    retried_without_tools=retried_gemini_without_tools,
-                )
+            (
+                did_retry,
+                err_text,
+                retried_gemini_tool_schema,
+                retried_gemini_tool_schema_camel,
+                retried_gemini_without_tools,
+            ) = await apply_gemini_stream_retries(
+                replace_stream_fn=_replace_stream,
+                extra_kwargs=ctx.extra_kwargs,
+                request=request,
+                provider_api_style=ctx.provider_api_style,
+                is_tool_continuation_turn=ctx.is_tool_continuation_turn,
+                err_text=err_text,
+                emitted_chunks=emitted_chunks,
+                retried_tool_schema=retried_gemini_tool_schema,
+                retried_tool_schema_camel=retried_gemini_tool_schema_camel,
+                retried_without_tools=retried_gemini_without_tools,
             )
             if did_retry:
                 continue
@@ -259,6 +292,7 @@ async def _logged_stream(
         None,
         latency_ms,
         True,
+        request_effective_data=_build_effective_request_for_log(ctx),
         extra={"selected_model": ctx.selected_model, "session_key": ctx.session_key},
     )
 
@@ -304,7 +338,9 @@ def _assemble_non_streaming_response(
         "session_key": ctx.session_key,
         "router_skipped": bool(ctx.router_skipped_reason),
         "router_skip_reason": ctx.router_skipped_reason,
-        "routing_reasoning": ctx.routing_result.reasoning if ctx.routing_result else None,
+        "routing_reasoning": ctx.routing_result.reasoning
+        if ctx.routing_result
+        else None,
         "routing_response": ctx.routing_response,
     }
     return response
@@ -398,6 +434,8 @@ def create_app(
             result = health_checker.last_results.get(model_name)
             if result is not None:
                 results.append(result)
+        if health_checker.last_router_result is not None:
+            results.append(health_checker.last_router_result)
 
         return HealthStatusResponse(
             interval=config.health_check.interval,
@@ -436,11 +474,19 @@ def create_app(
                 )
             elif ctx.compression_stats:
                 parts.append(f"history: {ctx.compression_stats['compressed_tokens']}")
+            log_tag = "routing"
+            if ctx.router_skipped_reason:
+                log_tag = "routing-skip"
+                parts.append(f"skip: {ctx.router_skipped_reason}")
             if ctx.routing_reasoning:
-                truncated = ctx.routing_reasoning[:80]
-                suffix = "..." if len(ctx.routing_reasoning) > 80 else ""
+                truncated = ctx.routing_reasoning[:ROUTING_REASON_LOG_PREVIEW_CHARS]
+                suffix = (
+                    "..."
+                    if len(ctx.routing_reasoning) > ROUTING_REASON_LOG_PREVIEW_CHARS
+                    else ""
+                )
                 parts.append(f"why: {truncated}{suffix}")
-            logger.info(f"[routing] {' | '.join(parts)}")
+            logger.info(f"[{log_tag}] {' | '.join(parts)}")
 
             start_time = time.monotonic()
             response = await call_with_fallback(ctx, router, health_checker)
@@ -449,12 +495,20 @@ def create_app(
             # Handle streaming vs non-streaming
             if request.stream:
                 return StreamingResponse(
-                    _logged_stream(ctx, response, response_model_prefix, show_model_prefix, start_time),
+                    _logged_stream(
+                        ctx,
+                        response,
+                        response_model_prefix,
+                        show_model_prefix,
+                        start_time,
+                    ),
                     media_type="text/event-stream",
                 )
             else:
                 latency_ms = (time.monotonic() - start_time) * 1000
-                result = _assemble_non_streaming_response(ctx, response, show_model_prefix)
+                result = _assemble_non_streaming_response(
+                    ctx, response, show_model_prefix
+                )
                 log_exchange(
                     "server",
                     result.get("id", "unknown"),
@@ -462,7 +516,11 @@ def create_app(
                     result,
                     latency_ms,
                     False,
-                    extra={"selected_model": ctx.selected_model, "session_key": ctx.session_key},
+                    request_effective_data=_build_effective_request_for_log(ctx),
+                    extra={
+                        "selected_model": ctx.selected_model,
+                        "session_key": ctx.session_key,
+                    },
                 )
                 return result
 

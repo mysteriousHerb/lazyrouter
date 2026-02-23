@@ -44,7 +44,10 @@ def normalize_requested_model(
         if (
             normalized == alias_str
             or normalized_lower == alias_lower
-            or (cfg_model and (normalized == cfg_model or normalized_lower == cfg_model_lower))
+            or (
+                cfg_model
+                and (normalized == cfg_model or normalized_lower == cfg_model_lower)
+            )
             or (cfg_model and cfg_model_lower.startswith(normalized_lower))
         ):
             candidates.append(alias_str)

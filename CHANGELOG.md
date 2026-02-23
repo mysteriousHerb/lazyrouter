@@ -27,6 +27,12 @@
 - Updated `lazyrouter/server.py` to support all three API styles
 - Updated `lazyrouter/health_checker.py` to work with different provider types
 - Updated `config.example.yaml` with API style examples
+- Improved assistant history prefix cleanup to also handle multipart `content` lists, not only plain strings.
+- Added cache-aware routing knobs: `cache_estimated_minutes_per_message`, `cache_create_input_multiplier`, and `cache_hit_input_multiplier` to improve `est_cached_input_price` signals.
+- Added router fallback support via `provider_fallback` and `model_fallback` when the primary router backend fails.
+- `/v1/health-status` now includes a dedicated router probe row (`is_router=true`) in addition to model health rows.
+- Increased routing reasoning preview length in server logs from 80 to 140 characters.
+- Exchange logs now include `request_effective` (post-normalization/compression payload) when available.
 
 ### Dependencies
 - Added `httpx>=0.27.0` for HTTP client functionality in new providers

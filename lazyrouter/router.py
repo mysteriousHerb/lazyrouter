@@ -46,6 +46,8 @@ INTERNAL_PARAM_KEYS = {
 ROUTING_PROMPT_TEMPLATE = """You are a model router. Analyze the user's query and select the most appropriate model.
 
 Each model has an Elo rating from LMSys Chatbot Arena (higher = better quality) for coding and writing, plus pricing per 1M tokens.
+When provided, est_cached_input_price already includes a conservative cache-adjusted input-cost estimate.
+For multi-turn cost comparisons, prioritize est_cached_input_price over raw input_price.
 Prefer cheaper models for simple tasks. Only pick expensive, high-Elo models when the task genuinely needs top-tier quality.
 
 IMPORTANT: If the user explicitly requests a specific model (e.g., "use opus for this", "route to gemini-2.5-pro", "switch to claude-sonnet"), honor that request directly.
@@ -78,6 +80,8 @@ class LLMRouter:
         # Get routing model configuration
         self.routing_model = config.router.model
         self.routing_provider = config.router.provider
+        self.routing_fallback_model = config.router.model_fallback
+        self.routing_fallback_provider = config.router.provider_fallback
         self.routing_temperature = config.router.temperature
 
         # Initialize routing logger
@@ -94,9 +98,55 @@ class LLMRouter:
         """Build LiteLLM params for routing model from router config directly."""
         return self._get_litellm_params(self.routing_provider, self.routing_model)
 
+    def _get_routing_backends(self) -> List[tuple[str, str, str]]:
+        """Return ordered routing backend candidates as (label, provider, model)."""
+        backends: List[tuple[str, str, str]] = [
+            ("primary", self.routing_provider, self.routing_model)
+        ]
+        if self.routing_fallback_provider and self.routing_fallback_model:
+            if not (
+                self.routing_fallback_provider == self.routing_provider
+                and self.routing_fallback_model == self.routing_model
+            ):
+                backends.append(
+                    (
+                        "fallback",
+                        self.routing_fallback_provider,
+                        self.routing_fallback_model,
+                    )
+                )
+        return backends
+
     # Backward-compatible alias for existing tests/callers.
     def _create_routing_provider(self) -> dict:
         return self._build_routing_params()
+
+    def _estimate_cached_input_price(
+        self, model_config: ModelConfig
+    ) -> Optional[float]:
+        """Estimate effective input price using conservative cache assumptions."""
+        if model_config.input_price is None or model_config.cache_ttl is None:
+            return None
+
+        seconds_per_message = (
+            self.config.router.cache_estimated_minutes_per_message * 60.0
+        )
+        hot_window_seconds = (
+            model_config.cache_ttl * 60
+        ) - self.config.router.cache_buffer_seconds
+        hot_hits = (
+            int(hot_window_seconds // seconds_per_message)
+            if hot_window_seconds > 0
+            else 0
+        )
+
+        total_turns = 1 + hot_hits
+        cache_create_input_multiplier = self.config.router.cache_create_input_multiplier
+        cache_hit_input_multiplier = self.config.router.cache_hit_input_multiplier
+        effective_multiplier = (
+            cache_create_input_multiplier + (hot_hits * cache_hit_input_multiplier)
+        ) / total_turns
+        return model_config.input_price * effective_multiplier
 
     def _build_model_descriptions(self, exclude_models: Optional[set] = None) -> str:
         """Build formatted string of model descriptions for routing prompt"""
@@ -114,6 +164,16 @@ class LLMRouter:
                 meta.append(f"input_price=${model_config.input_price}/1M tokens")
             if model_config.output_price is not None:
                 meta.append(f"output_price=${model_config.output_price}/1M tokens")
+            if model_config.cache_ttl is not None:
+                meta.append(f"cache_ttl={model_config.cache_ttl}min")
+                est_cached_input_price = self._estimate_cached_input_price(model_config)
+                if est_cached_input_price is not None:
+                    cadence = self.config.router.cache_estimated_minutes_per_message
+                    meta.append(
+                        "est_cached_input_price="
+                        f"${est_cached_input_price:.3f}/1M "
+                        f"(@~{cadence:.1f}min/msg)"
+                    )
             if meta:
                 parts.append(f"  [{', '.join(meta)}]")
             descriptions.append("".join(parts))
@@ -297,10 +357,6 @@ class LLMRouter:
         # Call routing model
         try:
             routing_messages = [{"role": "user", "content": routing_prompt}]
-            logger.debug("[router-call] model=%s", self.routing_model)
-
-            routing_params = self._build_routing_params()
-
             # Define JSON schema for structured output
             schema_name = "model_selection"
             schema_properties = {
@@ -326,18 +382,54 @@ class LLMRouter:
                 },
             }
 
-            # Call routing model via LiteLLM (non-streaming)
-            routing_params.update(
-                {
-                    "messages": routing_messages,
-                    "stream": False,
-                    "temperature": self.routing_temperature,
-                    "response_format": response_format,
-                }
-            )
+            response = None
+            response_dict = None
+            last_call_error: Optional[Exception] = None
+            routing_backends = self._get_routing_backends()
+            for backend_label, provider_name, backend_model in routing_backends:
+                logger.debug(
+                    "[router-call] backend=%s provider=%s model=%s",
+                    backend_label,
+                    provider_name,
+                    backend_model,
+                )
+                routing_params = self._get_litellm_params(provider_name, backend_model)
+                routing_params.update(
+                    {
+                        "messages": routing_messages,
+                        "stream": False,
+                        "temperature": self.routing_temperature,
+                        "response_format": response_format,
+                    }
+                )
+                try:
+                    response = await litellm.acompletion(**routing_params)
+                    response_dict = response.model_dump(exclude_none=True)
+                    if backend_label == "fallback":
+                        logger.warning(
+                            "[router-call] primary failed; routed with fallback router provider=%s model=%s",
+                            provider_name,
+                            backend_model,
+                        )
+                    break
+                except Exception as call_error:
+                    last_call_error = call_error
+                    if backend_label == "primary" and len(routing_backends) > 1:
+                        logger.warning(
+                            "[router-call] primary router failed: %s; trying configured fallback router",
+                            call_error,
+                        )
+                        continue
+                    raise
 
-            response = await litellm.acompletion(**routing_params)
-            response_dict = response.model_dump(exclude_none=True)
+            # Defensive sentinel: _get_routing_backends() should always provide at
+            # least one backend, and each loop iteration either breaks on success
+            # (response_dict set) or raises on failure. Keep this guard for
+            # unexpected future control-flow changes.
+            if response_dict is None:
+                if last_call_error is not None:
+                    raise last_call_error
+                raise RuntimeError("Router call failed without a response")
 
             # Extract response
             raw_content = response_dict["choices"][0]["message"]["content"]

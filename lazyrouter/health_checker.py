@@ -17,8 +17,11 @@ logger = logging.getLogger(__name__)
 
 BENCH_PROMPT = [{"role": "user", "content": "[lazyrouter-health-check] Say hi"}]
 BENCH_MAX_TOKENS = 16
-BENCH_TEMPERATURE = 0.0
+# Gemini 3 models warn and can misbehave under temp < 1.0. Keep probe temp at 1.0.
+BENCH_TEMPERATURE = 1.0
 HEALTH_CHECK_HEADER = {"X-LazyRouter-Request-Type": "health-check"}
+ALL_UNHEALTHY_RECHECK_ATTEMPTS = 3
+ALL_UNHEALTHY_RECHECK_DELAY_SECONDS = 10.0
 
 
 def is_result_healthy(result: HealthCheckResult, max_latency_ms: int) -> bool:
@@ -259,6 +262,7 @@ class HealthChecker:
             config.llms.keys()
         )  # assume all healthy at start
         self.last_results: Dict[str, HealthCheckResult] = {}
+        self.last_router_result: Optional[HealthCheckResult] = None
         self.last_check: Optional[str] = None
         self._task: Optional[asyncio.Task] = None
         self._run_lock = asyncio.Lock()
@@ -312,12 +316,29 @@ class HealthChecker:
         async with self._run_lock:
             return await self._run_check_once()
 
-    async def _run_check_once(self) -> list[HealthCheckResult]:
-        """Run a single health check against all configured models."""
+    async def _probe_once(
+        self,
+    ) -> tuple[
+        list[HealthCheckResult],
+        Dict[str, HealthCheckResult],
+        Set[str],
+        HealthCheckResult,
+    ]:
+        """Probe all configured models and router once."""
         tasks = []
         model_names = []
+        router_provider_name = self.config.router.provider
+        router_model = self.config.router.model
+        router_probe_source_model_name: Optional[str] = None
 
         for model_name, model_config in self.config.llms.items():
+            if (
+                model_config.provider == router_provider_name
+                and model_config.model == router_model
+                and router_probe_source_model_name is None
+            ):
+                router_probe_source_model_name = model_name
+
             api_key = self.config.get_api_key(model_config.provider)
             base_url = self.config.get_base_url(model_config.provider)
             api_style = self.config.get_api_style(model_config.provider)
@@ -336,9 +357,35 @@ class HealthChecker:
                 )
             )
 
-        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+        router_task = None
+        if router_probe_source_model_name is None:
+            router_api_key = self.config.get_api_key(router_provider_name)
+            router_base_url = self.config.get_base_url(router_provider_name)
+            router_api_style = self.config.get_api_style(router_provider_name)
+            router_provider = LiteLLMWrapper(
+                router_api_key, router_base_url, router_api_style, router_model
+            )
+            router_task = asyncio.wait_for(
+                check_model_health(
+                    router_model,
+                    router_provider,
+                    router_model,
+                    router_provider_name,
+                    is_router=True,
+                ),
+                timeout=self.hc_config.max_latency_ms / 1000 + 5,  # generous timeout
+            )
+
+        if router_task is None:
+            raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+            raw_router_result = None
+        else:
+            gathered = await asyncio.gather(*tasks, router_task, return_exceptions=True)
+            raw_results = gathered[:-1]
+            raw_router_result = gathered[-1]
 
         results = []
+        results_by_model: Dict[str, HealthCheckResult] = {}
         new_healthy = set()
         for i, r in enumerate(raw_results):
             name = model_names[i]
@@ -348,7 +395,7 @@ class HealthChecker:
                 r.is_healthy = is_healthy
 
                 results.append(r)
-                self.last_results[name] = r
+                results_by_model[name] = r
 
                 if is_healthy:
                     new_healthy.add(name)
@@ -362,7 +409,7 @@ class HealthChecker:
                             else f"total_ms={r.total_ms} > {self.hc_config.max_latency_ms}"
                         )
                     )
-                    logger.warning(f"Health check: {name} unhealthy — {reason}")
+                    logger.warning(f"Health check: {name} unhealthy - {reason}")
             else:
                 err = "Timed out" if isinstance(r, asyncio.TimeoutError) else str(r)
                 mc = self.config.llms[name]
@@ -376,8 +423,123 @@ class HealthChecker:
                     error=err,
                 )
                 results.append(result)
-                self.last_results[name] = result
-                logger.warning(f"Health check: {name} unhealthy — {err}")
+                results_by_model[name] = result
+                logger.warning(f"Health check: {name} unhealthy - {err}")
+
+        if router_probe_source_model_name is not None:
+            source_result = results_by_model.get(router_probe_source_model_name)
+            if source_result is not None:
+                router_result = source_result.model_copy(
+                    update={
+                        "model": router_model,
+                        "provider": router_provider_name,
+                        "actual_model": router_model,
+                        "is_router": True,
+                    }
+                )
+                if not router_result.is_healthy:
+                    reason = (
+                        router_result.error
+                        if router_result.status == "error"
+                        else (
+                            "total_ms unavailable"
+                            if router_result.total_ms is None
+                            else f"total_ms={router_result.total_ms} > {self.hc_config.max_latency_ms}"
+                        )
+                    )
+                    logger.warning(
+                        "Health check: router model unhealthy - %s (shared probe from %s)",
+                        reason,
+                        router_probe_source_model_name,
+                    )
+            else:
+                router_result = HealthCheckResult(
+                    model=router_model,
+                    provider=router_provider_name,
+                    actual_model=router_model,
+                    is_router=True,
+                    status="error",
+                    is_healthy=False,
+                    error="Shared router probe source model result missing",
+                )
+                logger.warning(
+                    "Health check: router model unhealthy - shared probe source result missing"
+                )
+        elif isinstance(raw_router_result, HealthCheckResult):
+            router_result = raw_router_result
+            router_result.is_healthy = is_result_healthy(
+                router_result, self.hc_config.max_latency_ms
+            )
+            if not router_result.is_healthy:
+                reason = (
+                    router_result.error
+                    if router_result.status == "error"
+                    else (
+                        "total_ms unavailable"
+                        if router_result.total_ms is None
+                        else f"total_ms={router_result.total_ms} > {self.hc_config.max_latency_ms}"
+                    )
+                )
+                logger.warning(f"Health check: router model unhealthy - {reason}")
+        else:
+            err = (
+                "Timed out"
+                if isinstance(raw_router_result, asyncio.TimeoutError)
+                else str(raw_router_result)
+            )
+            router_result = HealthCheckResult(
+                model=router_model,
+                provider=router_provider_name,
+                actual_model=router_model,
+                is_router=True,
+                status="error",
+                is_healthy=False,
+                error=err,
+            )
+            logger.warning(f"Health check: router model unhealthy - {err}")
+
+        return results, results_by_model, new_healthy, router_result
+
+    async def _run_check_once(self) -> list[HealthCheckResult]:
+        """Run model and router probes once, returning model results only.
+
+        Router probe status is stored in ``self.last_router_result`` and is not
+        included in the returned list.
+        """
+        results, results_by_model, new_healthy, router_result = await self._probe_once()
+
+        # One quick recheck helps smooth transient full-network blips.
+        if (
+            not new_healthy
+            and len(self.config.llms) > 0
+            and ALL_UNHEALTHY_RECHECK_ATTEMPTS > 0
+        ):
+            for attempt in range(1, ALL_UNHEALTHY_RECHECK_ATTEMPTS + 1):
+                logger.warning(
+                    "Health check: all models unhealthy; retrying in %.1fs (attempt %d/%d)",
+                    ALL_UNHEALTHY_RECHECK_DELAY_SECONDS,
+                    attempt,
+                    ALL_UNHEALTHY_RECHECK_ATTEMPTS,
+                )
+                await asyncio.sleep(ALL_UNHEALTHY_RECHECK_DELAY_SECONDS)
+                (
+                    retry_results,
+                    retry_results_by_model,
+                    retry_new_healthy,
+                    retry_router_result,
+                ) = await self._probe_once()
+                results = retry_results
+                results_by_model = retry_results_by_model
+                new_healthy = retry_new_healthy
+                router_result = retry_router_result
+
+                if new_healthy:
+                    logger.info(
+                        "Health check: recovered %d/%d models after immediate retry",
+                        len(new_healthy),
+                        len(self.config.llms),
+                    )
+                    break
 
         # If ALL models are unhealthy, log error and keep none available (strict mode)
         if not new_healthy:
@@ -391,10 +553,17 @@ class HealthChecker:
             if removed:
                 logger.info(f"Health check: models excluded: {removed}")
 
+        self.last_results = results_by_model
+        self.last_router_result = router_result
         self.healthy_models = new_healthy
         self.last_check = datetime.now(timezone.utc).isoformat()
+        router_health = (
+            "unknown"
+            if self.last_router_result is None
+            else ("healthy" if self.last_router_result.is_healthy else "unhealthy")
+        )
         logger.info(
-            f"Health check complete: {len(new_healthy)}/{len(self.config.llms)} models healthy"
+            f"Health check complete: {len(new_healthy)}/{len(self.config.llms)} models healthy; router={router_health}"
         )
         return results
 

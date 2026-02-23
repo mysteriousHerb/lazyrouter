@@ -7,8 +7,10 @@ class _StreamingProvider:
     def __init__(self, chunks, delay: float = 0.001):
         self._chunks = chunks
         self._delay = delay
+        self.calls = []
 
     async def chat_completion(self, *args, **kwargs):
+        self.calls.append({"args": args, "kwargs": kwargs})
         if not kwargs.get("stream", False):
             return {"ok": True}
 
@@ -74,3 +76,15 @@ def test_check_model_health_falls_back_to_non_stream_when_stream_probe_fails():
     assert result.ttft_source == "unavailable_non_stream"
     assert result.ttft_unavailable_reason is not None
     assert result.total_ms is not None
+
+
+def test_check_model_health_uses_probe_temperature_one():
+    provider = _StreamingProvider(
+        ['data: {"choices":[{"delta":{"content":"H"}}]}\n\n', "data: [DONE]\n\n"]
+    )
+
+    result = asyncio.run(check_model_health("m1", provider, "actual", "p1"))
+
+    assert result.status == "ok"
+    assert len(provider.calls) >= 1
+    assert provider.calls[0]["kwargs"]["temperature"] == 1.0

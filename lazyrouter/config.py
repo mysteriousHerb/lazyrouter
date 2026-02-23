@@ -1,5 +1,6 @@
 """Configuration loading and validation"""
 
+import logging
 import os
 import re
 from pathlib import Path
@@ -8,6 +9,8 @@ from typing import Any, Dict, Optional
 import yaml
 from dotenv import find_dotenv, load_dotenv
 from pydantic import BaseModel, Field, model_validator
+
+logger = logging.getLogger(__name__)
 
 
 class ServeConfig(BaseModel):
@@ -33,9 +36,9 @@ class RouterConfig(BaseModel):
 
     provider: str
     model: str
+    provider_fallback: Optional[str] = None
+    model_fallback: Optional[str] = None
     temperature: float = 0.0
-    input_price: Optional[float] = None
-    output_price: Optional[float] = None
     context_messages: Optional[int] = (
         None  # Number of recent messages to include (None = last user message only)
     )
@@ -43,10 +46,24 @@ class RouterConfig(BaseModel):
     cache_buffer_seconds: int = Field(
         default=30, ge=0
     )  # Safety buffer before cache TTL expires (default 30s)
+    cache_estimated_minutes_per_message: float = Field(
+        default=2.0, gt=0
+    )  # Conservative cadence for cache cost estimation in routing metadata
+    cache_create_input_multiplier: float = Field(
+        default=1.25, gt=0
+    )  # Input cost multiplier on cache creation turn for estimation
+    cache_hit_input_multiplier: float = Field(
+        default=0.10, ge=0
+    )  # Input cost multiplier on cache-hit turns for estimation
 
     @model_validator(mode="after")
-    def validate_prompt_placeholders(self) -> "RouterConfig":
-        """Validate that custom prompt contains required placeholders"""
+    def validate_router_config(self) -> "RouterConfig":
+        """Validate fallback pairing and custom prompt placeholders."""
+        if (self.provider_fallback is None) != (self.model_fallback is None):
+            raise ValueError(
+                "router.provider_fallback and router.model_fallback must be set together"
+            )
+
         if self.prompt is not None:
             required_placeholders = {"model_descriptions", "context", "current_request"}
             # Check if all required placeholders are present
@@ -240,5 +257,24 @@ def load_config(
         raise ValueError(
             f"Router provider '{config.router.provider}' not found in providers"
         )
+    if (
+        config.router.provider_fallback
+        and config.router.provider_fallback not in config.providers
+    ):
+        raise ValueError(
+            f"Router fallback provider '{config.router.provider_fallback}' not found in providers"
+        )
+    if config.router.model_fallback:
+        model_fallback = config.router.model_fallback
+        advertised = any(
+            llm.model == model_fallback
+            and llm.provider == config.router.provider_fallback
+            for llm in config.llms.values()
+        ) or any(llm.model == model_fallback for llm in config.llms.values())
+        if not advertised:
+            logger.warning(
+                "router.model_fallback '%s' is not advertised by configured llms; it will be resolved by provider runtime",
+                model_fallback,
+            )
 
     return config

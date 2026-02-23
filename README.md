@@ -82,6 +82,18 @@ Use `config.example.yaml` as the base. API keys are loaded from `.env`.
 - `coding_elo` / `writing_elo` in `llms` are quality signals you can source from `https://arena.ai/leaderboard`.
 - `context_compression` controls how aggressively old history is trimmed to keep token usage/cost under control during long agent runs.
 
+### Router Model Tip
+
+If you want a very fast router with minimal added latency, a strong option is:
+
+```yaml
+router:
+  provider: groq
+  model: "openai/gpt-oss-120b"
+```
+
+This can work well as a low-latency routing model when your `groq` provider is configured in `providers`.
+
 ### Custom Routing Prompt
 
 You can override the default routing prompt by adding a `prompt` field in the `router` section of your config:
@@ -109,6 +121,15 @@ The default routing prompt now supports explicit model requests from users. You 
 - "Switch to claude-sonnet"
 
 The router will honor these explicit requests and route to the specified model.
+
+### Exchange Logging Controls
+
+- Exchange logs include both the incoming request payload and an effective post-normalization payload when available (`request_effective` in JSONL entries).
+- Set `LAZYROUTER_LOG_MESSAGE_CONTENT=0` to redact all `content` fields in logged request/response payloads while keeping structural metadata for debugging.
+
+### Model Prefix Hygiene
+
+When `serve.show_model_prefix` is enabled, LazyRouter strips known `[model-name]` prefixes from assistant history before upstream calls. This works for plain string content and assistant `content` part lists (for multimodal/tool-use style messages).
 
 
 ## OpenClaw Integration

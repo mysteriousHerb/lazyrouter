@@ -3,6 +3,7 @@
 import asyncio
 
 import pytest
+from fastapi import HTTPException
 
 from lazyrouter.config import (
     Config,
@@ -14,13 +15,18 @@ from lazyrouter.config import (
     ServeConfig,
 )
 from lazyrouter.models import ChatCompletionRequest
-from lazyrouter.pipeline import RequestContext, normalize_messages, compress_context, prepare_provider, select_model
-from fastapi import HTTPException
-
+from lazyrouter.pipeline import (
+    RequestContext,
+    compress_context,
+    normalize_messages,
+    prepare_provider,
+    select_model,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _config(compression=False) -> Config:
     return Config(
@@ -28,8 +34,12 @@ def _config(compression=False) -> Config:
         router=RouterConfig(provider="p1", model="m1"),
         providers={"p1": ProviderConfig(api_key="k", api_style="openai")},
         llms={
-            "m1": ModelConfig(provider="p1", model="gpt-test", description="fast model"),
-            "m2": ModelConfig(provider="p1", model="gpt-test-2", description="slow model"),
+            "m1": ModelConfig(
+                provider="p1", model="gpt-test", description="fast model"
+            ),
+            "m2": ModelConfig(
+                provider="p1", model="gpt-test-2", description="slow model"
+            ),
         },
         health_check=HealthCheckConfig(enabled=False, interval=300),
         context_compression=ContextCompressionConfig(
@@ -59,6 +69,7 @@ def _ctx(request=None, config=None) -> RequestContext:
 # normalize_messages
 # ---------------------------------------------------------------------------
 
+
 def test_normalize_messages_basic():
     ctx = _ctx()
     normalize_messages(ctx)
@@ -71,10 +82,22 @@ def test_normalize_messages_basic():
 
 
 def test_normalize_messages_preserves_tool_calls():
-    req = _request(messages=[
-        {"role": "assistant", "content": None, "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "foo", "arguments": "{}"}}]},
-        {"role": "tool", "content": "result", "tool_call_id": "call_1"},
-    ])
+    req = _request(
+        messages=[
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "foo", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "content": "result", "tool_call_id": "call_1"},
+        ]
+    )
     ctx = _ctx(request=req)
     normalize_messages(ctx)
 
@@ -106,7 +129,11 @@ def test_normalize_messages_resolves_provider_model_name():
         serve=ServeConfig(),
         router=RouterConfig(provider="p1", model="m1"),
         providers={"p1": ProviderConfig(api_key="k", api_style="openai")},
-        llms={"m1": ModelConfig(provider="p1", model="claude-haiku-4-5-20251001", description="haiku")},
+        llms={
+            "m1": ModelConfig(
+                provider="p1", model="claude-haiku-4-5-20251001", description="haiku"
+            )
+        },
         health_check=HealthCheckConfig(enabled=False, interval=300),
     )
     req = _request(model="claude-haiku-4-5-20251001")
@@ -147,6 +174,7 @@ def test_normalize_messages_auto_stays_auto():
 # compress_context
 # ---------------------------------------------------------------------------
 
+
 def test_compress_context_noop_when_disabled():
     ctx = _ctx(config=_config(compression=False))
     ctx.messages = [{"role": "user", "content": "hi"}]
@@ -171,7 +199,10 @@ def test_compress_context_runs_when_enabled():
             for i in range(20)
             for msg in [
                 {"role": "user", "content": f"user message {i} " + "word " * 30},
-                {"role": "assistant", "content": f"assistant reply {i} " + "word " * 30},
+                {
+                    "role": "assistant",
+                    "content": f"assistant reply {i} " + "word " * 30,
+                },
             ]
         ]
         + [{"role": "user", "content": "final question"}]
@@ -190,6 +221,7 @@ def test_compress_context_runs_when_enabled():
 # prepare_provider
 # ---------------------------------------------------------------------------
 
+
 def test_prepare_provider_openai_no_tools():
     ctx = _ctx()
     ctx.messages = [{"role": "user", "content": "hi"}]
@@ -204,7 +236,15 @@ def test_prepare_provider_openai_no_tools():
 
 
 def test_prepare_provider_passes_tools():
-    tools = [{"type": "function", "function": {"name": "foo", "parameters": {"type": "object", "properties": {}}}}]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "foo",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
     req = _request(tools=tools)
     ctx = _ctx(request=req)
     ctx.messages = [{"role": "user", "content": "hi"}]
@@ -234,7 +274,9 @@ def test_prepare_provider_gemini_sanitizes_messages():
         serve=ServeConfig(),
         router=RouterConfig(provider="p1", model="m1"),
         providers={"p1": ProviderConfig(api_key="k", api_style="gemini")},
-        llms={"m1": ModelConfig(provider="p1", model="gemini-flash", description="gemini")},
+        llms={
+            "m1": ModelConfig(provider="p1", model="gemini-flash", description="gemini")
+        },
         health_check=HealthCheckConfig(enabled=False),
     )
     req = _request()
@@ -253,6 +295,7 @@ def test_prepare_provider_gemini_sanitizes_messages():
 # ---------------------------------------------------------------------------
 # select_model
 # ---------------------------------------------------------------------------
+
 
 class _FakeHealthChecker:
     def __init__(self, healthy=None, unhealthy=None):
@@ -302,7 +345,9 @@ def test_select_model_single_model_skips_router():
         serve=ServeConfig(),
         router=RouterConfig(provider="p1", model="m1"),
         providers={"p1": ProviderConfig(api_key="k", api_style="openai")},
-        llms={"m1": ModelConfig(provider="p1", model="gpt-test", description="only model")},
+        llms={
+            "m1": ModelConfig(provider="p1", model="gpt-test", description="only model")
+        },
         health_check=HealthCheckConfig(enabled=False, interval=300),
         context_compression=ContextCompressionConfig(),
     )
@@ -312,10 +357,12 @@ def test_select_model_single_model_skips_router():
     router = _FakeRouter(returns_model="m1")
     router_called = False
     original_route = router.route
+
     async def tracking_route(*args, **kwargs):
         nonlocal router_called
         router_called = True
         return await original_route(*args, **kwargs)
+
     router.route = tracking_route
 
     asyncio.run(select_model(ctx, _FakeHealthChecker(healthy={"m1"}), router))
@@ -372,19 +419,32 @@ def test_select_model_raises_400_for_unknown_model():
 # Anthropic prompt caching
 # ---------------------------------------------------------------------------
 
+
 def _anthropic_config() -> Config:
     return Config(
         serve=ServeConfig(),
         router=RouterConfig(provider="p1", model="m1"),
         providers={"p1": ProviderConfig(api_key="k", api_style="anthropic")},
-        llms={"m1": ModelConfig(provider="p1", model="claude-sonnet", description="claude")},
+        llms={
+            "m1": ModelConfig(
+                provider="p1", model="claude-sonnet", description="claude"
+            )
+        },
         health_check=HealthCheckConfig(enabled=False),
     )
 
 
 def test_prepare_provider_anthropic_keeps_system_message_unchanged():
     cfg = _anthropic_config()
-    tools = [{"type": "function", "function": {"name": "read", "parameters": {"type": "object", "properties": {}}}}]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
     req = _request(tools=tools)
     ctx = _ctx(request=req, config=cfg)
     ctx.messages = [
@@ -404,8 +464,20 @@ def test_prepare_provider_anthropic_keeps_system_message_unchanged():
 def test_prepare_provider_anthropic_does_not_add_cache_to_tools():
     cfg = _anthropic_config()
     tools = [
-        {"type": "function", "function": {"name": "read", "parameters": {"type": "object", "properties": {}}}},
-        {"type": "function", "function": {"name": "write", "parameters": {"type": "object", "properties": {}}}},
+        {
+            "type": "function",
+            "function": {
+                "name": "read",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "write",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
     ]
     req = _request(tools=tools)
     ctx = _ctx(request=req, config=cfg)
@@ -425,7 +497,13 @@ def test_prepare_provider_anthropic_keeps_system_block_list_unchanged():
     req = _request()
     ctx = _ctx(request=req, config=cfg)
     ctx.messages = [
-        {"role": "system", "content": [{"type": "text", "text": "You are helpful."}, {"type": "text", "text": "Be concise."}]},
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "You are helpful."},
+                {"type": "text", "text": "Be concise."},
+            ],
+        },
         {"role": "user", "content": "hi"},
     ]
     ctx.selected_model = "m1"
@@ -485,7 +563,15 @@ def test_prepare_provider_anthropic_adds_dummy_user_when_only_system():
 
 def test_prepare_provider_openai_no_cache_markers():
     """OpenAI requests must not get cache_control markers."""
-    tools = [{"type": "function", "function": {"name": "foo", "parameters": {"type": "object", "properties": {}}}}]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "foo",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
     req = _request(tools=tools)
     ctx = _ctx(request=req)
     ctx.messages = [
@@ -507,7 +593,17 @@ def test_select_model_skips_router_on_tool_continuation():
     req = _request(
         session_id="test-session-123",
         messages=[
-            {"role": "assistant", "content": None, "tool_calls": [{"id": "call_abc", "type": "function", "function": {"name": "bar", "arguments": "{}"}}]},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_abc",
+                        "type": "function",
+                        "function": {"name": "bar", "arguments": "{}"},
+                    }
+                ],
+            },
             {"role": "tool", "content": "done", "tool_call_id": "call_abc"},
         ],
     )
@@ -516,6 +612,7 @@ def test_select_model_skips_router_on_tool_continuation():
 
     # Seed the tool cache after normalize_messages so session_key is set
     from lazyrouter.tool_cache import tool_cache_set
+
     tool_cache_set(ctx.session_key, "call_abc", "m2", "bar")
 
     hc = _FakeHealthChecker(healthy={"m1", "m2"})

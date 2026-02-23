@@ -3,11 +3,35 @@
 import argparse
 import sys
 from pathlib import Path
+from typing import Any
 
 SOURCE_DIRS = {
     "server": Path("logs/server"),
     "test_proxy": Path("logs/test_proxy"),
 }
+
+
+def content_to_text(content: Any) -> str:
+    """Normalize mixed content payloads into plain text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                text = block.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+                else:
+                    parts.append(str(block))
+            else:
+                parts.append(str(block))
+        return "\n".join(parts)
+    if content is None:
+        return ""
+    return str(content)
 
 
 def resolve_log_file(source: str, file: str | None) -> Path:
@@ -25,14 +49,18 @@ def resolve_log_file(source: str, file: str | None) -> Path:
 
     log_dir = SOURCE_DIRS.get(source)
     if log_dir is None:
-        print(f"Error: Unknown source '{source}'. Choose from: {', '.join(SOURCE_DIRS)}")
+        print(
+            f"Error: Unknown source '{source}'. Choose from: {', '.join(SOURCE_DIRS)}"
+        )
         sys.exit(1)
 
     if not log_dir.exists():
         print(f"Error: Log directory not found: {log_dir}")
         sys.exit(1)
 
-    jsonl_files = sorted(log_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+    jsonl_files = sorted(
+        log_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True
+    )
     if not jsonl_files:
         print(f"Error: No .jsonl files found in {log_dir}")
         sys.exit(1)

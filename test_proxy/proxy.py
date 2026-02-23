@@ -17,7 +17,6 @@ import re
 import time
 import uuid
 from contextlib import asynccontextmanager
-
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Optional
 from urllib.parse import unquote
@@ -29,6 +28,8 @@ from fastapi.responses import StreamingResponse
 from lazyrouter.config import Config, load_config
 from lazyrouter.exchange_logger import (
     configure_log_dir as _configure_exchange_log_dir,
+)
+from lazyrouter.exchange_logger import (
     log_exchange,
 )
 from lazyrouter.model_normalization import (
@@ -227,7 +228,6 @@ def resolve_gemini_model_path(path: str) -> tuple[str, Optional[str]]:
     return normalized_path, None
 
 
-
 _REDACTABLE_QUERY_PARAM_PATTERN = re.compile(
     r"([?&](?:key|api_key|x-api-key)=)([^&\s]+)",
     flags=re.IGNORECASE,
@@ -274,7 +274,6 @@ def _pop_header(headers: Dict[str, str], header_name: str) -> Optional[str]:
         if key.lower() == needle:
             return headers.pop(key)
     return None
-
 
 
 @asynccontextmanager

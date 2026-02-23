@@ -16,36 +16,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _utils import SOURCE_DIRS, add_source_args, resolve_log_file
+from _utils import SOURCE_DIRS, add_source_args, content_to_text, resolve_log_file
 from analyze_system_prompt import extract_sections
 
 
 def _serialized_size_bytes(value: Any) -> int:
     """Approximate payload size in bytes using JSON serialization."""
     return len(json.dumps(value, ensure_ascii=False, default=str).encode("utf-8"))
-
-
-def _content_to_text(content: Any) -> str:
-    """Normalize message content into plain text."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: List[str] = []
-        for block in content:
-            if isinstance(block, str):
-                parts.append(block)
-            elif isinstance(block, dict):
-                text = block.get("text")
-                if isinstance(text, str):
-                    parts.append(text)
-                else:
-                    parts.append(str(block))
-            else:
-                parts.append(str(block))
-        return "\n".join(parts)
-    if content is None:
-        return ""
-    return str(content)
 
 
 def analyze_message_sizes(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -84,7 +61,7 @@ def analyze_tools(tools: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def analyze_system_prompt(system_content: Any) -> Dict[str, Any]:
     """Analyze system prompt structure using shared section extraction."""
-    system_text = _content_to_text(system_content)
+    system_text = content_to_text(system_content)
     lines = system_text.split("\n") if system_text else []
     sections = extract_sections(system_text)
     section_map = {name: size for name, _start, _line_count, size in sections}
@@ -97,7 +74,9 @@ def analyze_system_prompt(system_content: Any) -> Dict[str, Any]:
     }
 
 
-def analyze_log_entry(entry: Dict[str, Any], entry_num: int) -> Optional[Dict[str, Any]]:
+def analyze_log_entry(
+    entry: Dict[str, Any], entry_num: int
+) -> Optional[Dict[str, Any]]:
     """Analyze a single log entry. Returns None for malformed entries."""
     request = entry.get("request", {})
     if not isinstance(request, dict):
@@ -118,7 +97,9 @@ def analyze_log_entry(entry: Dict[str, Any], entry_num: int) -> Optional[Dict[st
         tools = []
 
     # Find system message
-    system_msg = next((m for m in messages if isinstance(m, dict) and m.get("role") == "system"), None)
+    system_msg = next(
+        (m for m in messages if isinstance(m, dict) and m.get("role") == "system"), None
+    )
     system_analysis = None
     if system_msg:
         system_analysis = analyze_system_prompt(system_msg.get("content", ""))
@@ -152,7 +133,9 @@ def analyze_log_entry(entry: Dict[str, Any], entry_num: int) -> Optional[Dict[st
     }
 
 
-def calculate_compression_opportunities(analyses: List[Dict[str, Any]]) -> Dict[str, Any]:
+def calculate_compression_opportunities(
+    analyses: List[Dict[str, Any]],
+) -> Dict[str, Any]:
     """Calculate potential compression opportunities."""
     if not analyses:
         return {
@@ -180,7 +163,9 @@ def calculate_compression_opportunities(analyses: List[Dict[str, Any]]) -> Dict[
         }
 
     # System prompt repetition
-    system_sizes = [a["system_prompt"]["total_size"] for a in analyses if a["system_prompt"]]
+    system_sizes = [
+        a["system_prompt"]["total_size"] for a in analyses if a["system_prompt"]
+    ]
     avg_system_size = sum(system_sizes) / len(system_sizes) if system_sizes else 0
 
     # Tool definition repetition
@@ -226,7 +211,9 @@ def calculate_compression_opportunities(analyses: List[Dict[str, Any]]) -> Dict[
     }
 
 
-def print_analysis(analyses: List[Dict[str, Any]], opportunities: Dict[str, Any]) -> None:
+def print_analysis(
+    analyses: List[Dict[str, Any]], opportunities: Dict[str, Any]
+) -> None:
     """Print formatted analysis."""
     if not analyses:
         print("No valid log entries to analyze.")
@@ -285,9 +272,10 @@ def print_analysis(analyses: List[Dict[str, Any]], opportunities: Dict[str, Any]
         print()
 
     # Calculate total potential savings
-    total_savings = (
-        opportunities.get("system_prompt", {}).get("estimated_savings_per_request", 0)
-        + opportunities.get("tool_definitions", {}).get("estimated_savings_per_request", 0)
+    total_savings = opportunities.get("system_prompt", {}).get(
+        "estimated_savings_per_request", 0
+    ) + opportunities.get("tool_definitions", {}).get(
+        "estimated_savings_per_request", 0
     )
 
     print("=" * 80)
@@ -297,7 +285,9 @@ def print_analysis(analyses: List[Dict[str, Any]], opportunities: Dict[str, Any]
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Analyze logs for compression opportunities.")
+    parser = argparse.ArgumentParser(
+        description="Analyze logs for compression opportunities."
+    )
     add_source_args(parser)
     args = parser.parse_args()
 
