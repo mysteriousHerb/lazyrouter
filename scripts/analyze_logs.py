@@ -97,7 +97,9 @@ def analyze_system_prompt(system_content: Any) -> Dict[str, Any]:
     }
 
 
-def analyze_log_entry(entry: Dict[str, Any], entry_num: int) -> Optional[Dict[str, Any]]:
+def analyze_log_entry(
+    entry: Dict[str, Any], entry_num: int
+) -> Optional[Dict[str, Any]]:
     """Analyze a single log entry. Returns None for malformed entries."""
     request = entry.get("request", {})
     if not isinstance(request, dict):
@@ -118,7 +120,9 @@ def analyze_log_entry(entry: Dict[str, Any], entry_num: int) -> Optional[Dict[st
         tools = []
 
     # Find system message
-    system_msg = next((m for m in messages if isinstance(m, dict) and m.get("role") == "system"), None)
+    system_msg = next(
+        (m for m in messages if isinstance(m, dict) and m.get("role") == "system"), None
+    )
     system_analysis = None
     if system_msg:
         system_analysis = analyze_system_prompt(system_msg.get("content", ""))
@@ -152,7 +156,9 @@ def analyze_log_entry(entry: Dict[str, Any], entry_num: int) -> Optional[Dict[st
     }
 
 
-def calculate_compression_opportunities(analyses: List[Dict[str, Any]]) -> Dict[str, Any]:
+def calculate_compression_opportunities(
+    analyses: List[Dict[str, Any]],
+) -> Dict[str, Any]:
     """Calculate potential compression opportunities."""
     if not analyses:
         return {
@@ -180,7 +186,9 @@ def calculate_compression_opportunities(analyses: List[Dict[str, Any]]) -> Dict[
         }
 
     # System prompt repetition
-    system_sizes = [a["system_prompt"]["total_size"] for a in analyses if a["system_prompt"]]
+    system_sizes = [
+        a["system_prompt"]["total_size"] for a in analyses if a["system_prompt"]
+    ]
     avg_system_size = sum(system_sizes) / len(system_sizes) if system_sizes else 0
 
     # Tool definition repetition
@@ -226,7 +234,9 @@ def calculate_compression_opportunities(analyses: List[Dict[str, Any]]) -> Dict[
     }
 
 
-def print_analysis(analyses: List[Dict[str, Any]], opportunities: Dict[str, Any]) -> None:
+def print_analysis(
+    analyses: List[Dict[str, Any]], opportunities: Dict[str, Any]
+) -> None:
     """Print formatted analysis."""
     if not analyses:
         print("No valid log entries to analyze.")
@@ -285,9 +295,10 @@ def print_analysis(analyses: List[Dict[str, Any]], opportunities: Dict[str, Any]
         print()
 
     # Calculate total potential savings
-    total_savings = (
-        opportunities.get("system_prompt", {}).get("estimated_savings_per_request", 0)
-        + opportunities.get("tool_definitions", {}).get("estimated_savings_per_request", 0)
+    total_savings = opportunities.get("system_prompt", {}).get(
+        "estimated_savings_per_request", 0
+    ) + opportunities.get("tool_definitions", {}).get(
+        "estimated_savings_per_request", 0
     )
 
     print("=" * 80)
@@ -297,7 +308,9 @@ def print_analysis(analyses: List[Dict[str, Any]], opportunities: Dict[str, Any]
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Analyze logs for compression opportunities.")
+    parser = argparse.ArgumentParser(
+        description="Analyze logs for compression opportunities."
+    )
     add_source_args(parser)
     args = parser.parse_args()
 

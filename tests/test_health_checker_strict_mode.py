@@ -33,6 +33,9 @@ def _config() -> Config:
 
 
 def test_health_checker_keeps_none_when_all_unhealthy(monkeypatch):
+    monkeypatch.setattr(hc_mod, "ALL_UNHEALTHY_RECHECK_ATTEMPTS", 1)
+    monkeypatch.setattr(hc_mod, "ALL_UNHEALTHY_RECHECK_DELAY_SECONDS", 0.0)
+
     async def _fake_bench(*args, **kwargs):
         return HealthCheckResult(
             model=args[0],
@@ -75,3 +78,34 @@ def test_health_checker_tracks_router_probe_result(monkeypatch):
     assert checker.last_router_result.is_router is True
     assert checker.last_router_result.model == "m1"
     assert checker.last_router_result.is_healthy is True
+
+
+def test_health_checker_retries_three_times_when_all_unhealthy(monkeypatch):
+    monkeypatch.setattr(hc_mod, "ALL_UNHEALTHY_RECHECK_ATTEMPTS", 3)
+    monkeypatch.setattr(hc_mod, "ALL_UNHEALTHY_RECHECK_DELAY_SECONDS", 0.0)
+
+    calls = {"count": 0}
+
+    async def _fake_bench(*args, **kwargs):
+        calls["count"] += 1
+        model_name = args[0]
+        provider_name = args[3]
+        actual_model = args[2]
+        is_router = bool(kwargs.get("is_router", False))
+        return HealthCheckResult(
+            model=model_name,
+            provider=provider_name,
+            actual_model=actual_model,
+            is_router=is_router,
+            status="error",
+            error="temporary network outage",
+        )
+
+    monkeypatch.setattr(hc_mod, "check_model_health", _fake_bench)
+
+    checker = hc_mod.HealthChecker(_config())
+    asyncio.run(checker.run_check())
+
+    # 2 model probes + 1 router probe, across 1 initial + 3 retry passes.
+    assert calls["count"] == 12
+    assert checker.healthy_models == set()

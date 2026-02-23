@@ -102,12 +102,16 @@ def cache_tracker_clear(session_key: str) -> Optional[str]:
         entry = _cache_timestamps.pop(session_key, None)
     if entry:
         model_name, _ = entry
-        logger.debug("[cache-tracker] cleared session=%s model=%s", session_key, model_name)
+        logger.debug(
+            "[cache-tracker] cleared session=%s model=%s", session_key, model_name
+        )
         return model_name
     return None
 
 
-def is_cache_hot(age_seconds: float, cache_ttl_minutes: int, buffer_seconds: int = 30) -> bool:
+def is_cache_hot(
+    age_seconds: float, cache_ttl_minutes: int, buffer_seconds: int = 30
+) -> bool:
     """Check if cache is still hot (worth preserving).
 
     We use a configurable buffer before TTL to account for routing latency.

@@ -15,35 +15,35 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
+from .cache_tracker import (
+    cache_tracker_clear,
+    cache_tracker_get,
+    cache_tracker_set,
+    is_cache_hot,
+)
 from .context_compressor import compress_messages
+from .gemini_retries import call_router_with_gemini_fallback
 from .message_utils import (
     collect_trailing_tool_results,
     content_to_text,
     tool_call_name_by_id,
 )
 from .model_normalization import normalize_requested_model
-from .gemini_retries import call_router_with_gemini_fallback
 from .retry_handler import (
     INITIAL_RETRY_DELAY,
     RETRY_MULTIPLIER,
     is_retryable_error,
     select_fallback_models,
 )
-from .session_utils import build_compression_config_for_request, extract_session_key
 from .sanitizers import (
     sanitize_messages_for_gemini,
     sanitize_tool_schema_for_anthropic,
     sanitize_tool_schema_for_gemini,
 )
+from .session_utils import build_compression_config_for_request, extract_session_key
 from .tool_cache import (
     infer_pinned_model_from_tool_results,
     tool_cache_clear_session,
-)
-from .cache_tracker import (
-    cache_tracker_get,
-    cache_tracker_set,
-    cache_tracker_clear,
-    is_cache_hot,
 )
 
 if TYPE_CHECKING:
@@ -55,8 +55,19 @@ _ANTHROPIC_DUMMY_USER_MESSAGE = {"role": "user", "content": "Please continue."}
 _MESSAGE_ID_RE = re.compile(r'("message_id"\s*:\s*)"[^"]*"')
 
 _PASSTHROUGH_EXCLUDE = {
-    "model", "messages", "temperature", "max_tokens", "max_completion_tokens",
-    "stream", "top_p", "n", "stop", "tools", "tool_choice", "stream_options", "store",
+    "model",
+    "messages",
+    "temperature",
+    "max_tokens",
+    "max_completion_tokens",
+    "stream",
+    "top_p",
+    "n",
+    "stop",
+    "tools",
+    "tool_choice",
+    "stream_options",
+    "store",
 }
 
 
@@ -72,7 +83,9 @@ class RequestContext:
     messages: List[Dict[str, Any]] = dataclasses.field(default_factory=list)
     session_key: Optional[str] = None
     is_tool_continuation_turn: bool = False
-    incoming_tool_results: List[Dict[str, Any]] = dataclasses.field(default_factory=list)
+    incoming_tool_results: List[Dict[str, Any]] = dataclasses.field(
+        default_factory=list
+    )
     tool_name_by_id: Dict[str, str] = dataclasses.field(default_factory=dict)
     last_user_text: str = ""
     resolved_model: str = ""
@@ -100,6 +113,7 @@ class RequestContext:
 # Pure helper: provider preparation for a single model
 # ---------------------------------------------------------------------------
 
+
 def _prepare_for_model(
     model_name: str,
     messages: list,
@@ -123,7 +137,9 @@ def _prepare_for_model(
         if api_style == "anthropic":
             prep_extra["tools"] = sanitize_tool_schema_for_anthropic(tools)
         elif api_style == "gemini":
-            prep_extra["tools"] = sanitize_tool_schema_for_gemini(tools, output_format="openai")
+            prep_extra["tools"] = sanitize_tool_schema_for_gemini(
+                tools, output_format="openai"
+            )
         else:
             prep_extra["tools"] = tools
 
@@ -158,6 +174,7 @@ def _prepare_for_model(
 # ---------------------------------------------------------------------------
 # Step 1: Message normalisation
 # ---------------------------------------------------------------------------
+
 
 def _build_prefix_re(known_models: set) -> re.Pattern:
     """Build a regex that matches only known model name prefixes like [model-name] ."""
@@ -233,7 +250,9 @@ def normalize_messages(ctx: RequestContext) -> None:
 
     show_model_prefix = bool(getattr(ctx.config.serve, "show_model_prefix", False))
     if show_model_prefix:
-        messages = _strip_model_prefixes_from_history(messages, set(ctx.config.llms.keys()))
+        messages = _strip_model_prefixes_from_history(
+            messages, set(ctx.config.llms.keys())
+        )
 
     session_key = extract_session_key(request, messages)
     if "/new" in last_user_text_raw or "/reset" in last_user_text_raw:
@@ -269,6 +288,7 @@ def normalize_messages(ctx: RequestContext) -> None:
 # Step 2: Model selection
 # ---------------------------------------------------------------------------
 
+
 async def _wait_for_healthy_models(ctx: RequestContext, health_checker: Any) -> bool:
     """Backoff-poll until at least one healthy model exists. Returns False if timed out."""
     if len(ctx.config.llms) == 0:
@@ -293,7 +313,10 @@ async def _wait_for_healthy_models(ctx: RequestContext, health_checker: Any) -> 
         await asyncio.sleep(delay)
         await health_checker.run_check()
         if len(health_checker.healthy_models) > 0:
-            logger.info("[health-check] models recovered: %s", list(health_checker.healthy_models))
+            logger.info(
+                "[health-check] models recovered: %s",
+                list(health_checker.healthy_models),
+            )
             return True
         elapsed = time.monotonic() - start_time
         delay = min(delay * RETRY_MULTIPLIER, max_wait - elapsed)
@@ -323,7 +346,9 @@ async def _handle_cache_aware_routing(
         return None
 
     buffer_seconds = ctx.config.router.cache_buffer_seconds
-    if not is_cache_hot(cache_age_seconds, cached_model_config.cache_ttl, buffer_seconds):
+    if not is_cache_hot(
+        cache_age_seconds, cached_model_config.cache_ttl, buffer_seconds
+    ):
         logger.info(
             "[cache-aware] cache expired for %s (age=%.1fs, ttl=%dmin), routing freely",
             cached_model,
@@ -349,7 +374,9 @@ async def _handle_cache_aware_routing(
     highest_healthy_score = max(healthy_scores) if healthy_scores else 0
 
     if cached_score >= highest_healthy_score:
-        ctx.router_skipped_reason = f"hot cache (age={int(cache_age_seconds)}s, highest-ELO)"
+        ctx.router_skipped_reason = (
+            f"hot cache (age={int(cache_age_seconds)}s, highest-ELO)"
+        )
         logger.info(
             "[cache-aware] sticking with %s (cache_age=%.1fs, ttl=%dmin, no better healthy model)",
             cached_model,
@@ -428,7 +455,9 @@ async def select_model(ctx: RequestContext, health_checker: Any, router: Any) ->
     if ctx.resolved_model == "auto":
         has_healthy = await _wait_for_healthy_models(ctx, health_checker)
         if not has_healthy and len(ctx.config.llms) > 0:
-            logger.warning("[health-check] no healthy models available after retries; rejecting auto request")
+            logger.warning(
+                "[health-check] no healthy models available after retries; rejecting auto request"
+            )
             raise HTTPException(status_code=503, detail="No healthy models available")
 
         selected_model = None
@@ -437,26 +466,36 @@ async def select_model(ctx: RequestContext, health_checker: Any, router: Any) ->
         if len(ctx.config.llms) == 1:
             selected_model = next(iter(ctx.config.llms))
             ctx.router_skipped_reason = "single model"
-            logger.info("[router-skip] only one model configured, skipping router: %s", selected_model)
+            logger.info(
+                "[router-skip] only one model configured, skipping router: %s",
+                selected_model,
+            )
 
         skip_router_on_tool_results = bool(
             getattr(ctx.config.context_compression, "skip_router_on_tool_results", True)
         )
 
         if skip_router_on_tool_results and ctx.is_tool_continuation_turn:
-            pinned_model, matched_count, total_count = infer_pinned_model_from_tool_results(
-                ctx.session_key, ctx.incoming_tool_results, ctx.tool_name_by_id
+            pinned_model, matched_count, total_count = (
+                infer_pinned_model_from_tool_results(
+                    ctx.session_key, ctx.incoming_tool_results, ctx.tool_name_by_id
+                )
             )
             if pinned_model and pinned_model in ctx.config.llms:
                 if pinned_model in health_checker.unhealthy_models:
-                    logger.warning("[router-skip] cached model unhealthy, rerouting: %s", pinned_model)
+                    logger.warning(
+                        "[router-skip] cached model unhealthy, rerouting: %s",
+                        pinned_model,
+                    )
                 else:
                     selected_model = pinned_model
                     ctx.router_skipped_reason = f"cached {matched_count}/{total_count}"
                     logger.debug("[router-skip] using cached model: %s", selected_model)
 
         if selected_model is None:
-            selected_model = await _handle_cache_aware_routing(ctx, health_checker, router)
+            selected_model = await _handle_cache_aware_routing(
+                ctx, health_checker, router
+            )
 
         if selected_model is None:
             routing_result = await router.route(
@@ -473,7 +512,9 @@ async def select_model(ctx: RequestContext, health_checker: Any, router: Any) ->
 
     model_config = ctx.config.llms.get(selected_model)
     if not model_config:
-        raise HTTPException(status_code=400, detail=f"Model '{selected_model}' not found")
+        raise HTTPException(
+            status_code=400, detail=f"Model '{selected_model}' not found"
+        )
 
     ctx.selected_model = selected_model
     ctx.model_config = model_config
@@ -484,6 +525,7 @@ async def select_model(ctx: RequestContext, health_checker: Any, router: Any) ->
 # ---------------------------------------------------------------------------
 # Step 3: Context compression
 # ---------------------------------------------------------------------------
+
 
 def compress_context(ctx: RequestContext) -> None:
     """Optionally compress ctx.messages; sets ctx.compression_stats."""
@@ -521,6 +563,7 @@ def compress_context(ctx: RequestContext) -> None:
 # Step 4: Provider preparation
 # ---------------------------------------------------------------------------
 
+
 def prepare_provider(ctx: RequestContext) -> None:
     """Populate ctx.provider_messages, extra_kwargs, provider_api_style, provider_kwargs, effective_max_tokens."""
     provider_messages, extra_kwargs, api_style = _prepare_for_model(
@@ -530,7 +573,9 @@ def prepare_provider(ctx: RequestContext) -> None:
     ctx.extra_kwargs = extra_kwargs
     ctx.provider_api_style = api_style
 
-    ctx.effective_max_tokens = ctx.request.max_tokens or ctx.request.max_completion_tokens
+    ctx.effective_max_tokens = (
+        ctx.request.max_tokens or ctx.request.max_completion_tokens
+    )
 
     provider_kwargs: Dict[str, Any] = {}
     req = ctx.request
@@ -554,6 +599,7 @@ def prepare_provider(ctx: RequestContext) -> None:
 # Step 5: Model call with fallback
 # ---------------------------------------------------------------------------
 
+
 async def _backoff_retry_loop(
     ctx: RequestContext,
     original_model: str,
@@ -573,14 +619,22 @@ async def _backoff_retry_loop(
         elapsed = time.monotonic() - start_time
         if elapsed >= max_wait:
             break
-        logger.warning("[backoff] all models failed, waiting %.1fs (%.0f/%.0fs)", delay, elapsed, max_wait)
+        logger.warning(
+            "[backoff] all models failed, waiting %.1fs (%.0f/%.0fs)",
+            delay,
+            elapsed,
+            max_wait,
+        )
         await asyncio.sleep(delay)
 
         await health_checker.run_check()
 
         healthy_set = health_checker.healthy_models
         retry_models = [original_model] + select_fallback_models(
-            original_model, ctx.config.llms, healthy_models=healthy_set, already_tried=tried_models
+            original_model,
+            ctx.config.llms,
+            healthy_models=healthy_set,
+            already_tried=tried_models,
         )
         tried_models.clear()
 
@@ -622,14 +676,19 @@ async def _backoff_retry_loop(
     return None
 
 
-async def call_with_fallback(ctx: RequestContext, router_instance: Any, health_checker: Any) -> Any:
+async def call_with_fallback(
+    ctx: RequestContext, router_instance: Any, health_checker: Any
+) -> Any:
     """Call model with ELO-similar fallback and backoff retry. Mutates ctx on fallback. Returns raw response."""
     tried_models: set = set()
     original_model = ctx.selected_model
     healthy_set = health_checker.healthy_models
 
     models_to_try = [ctx.selected_model] + select_fallback_models(
-        ctx.selected_model, ctx.config.llms, healthy_models=healthy_set, already_tried=tried_models
+        ctx.selected_model,
+        ctx.config.llms,
+        healthy_models=healthy_set,
+        already_tried=tried_models,
     )
 
     last_error = None
@@ -657,7 +716,11 @@ async def call_with_fallback(ctx: RequestContext, router_instance: Any, health_c
                 effective_max_tokens=ctx.effective_max_tokens,
             )
             if try_model != original_model:
-                logger.info("[fallback] succeeded with %s (ELO-similar) after %s failed", try_model, original_model)
+                logger.info(
+                    "[fallback] succeeded with %s (ELO-similar) after %s failed",
+                    try_model,
+                    original_model,
+                )
             ctx.selected_model = try_model
             ctx.model_config = mc
             ctx.provider_api_style = api_style
@@ -668,15 +731,23 @@ async def call_with_fallback(ctx: RequestContext, router_instance: Any, health_c
         except Exception as e:
             last_error = e
             if is_retryable_error(e):
-                logger.warning("[fallback] model %s failed with retryable error: %s", try_model, str(e)[:200])
+                logger.warning(
+                    "[fallback] model %s failed with retryable error: %s",
+                    try_model,
+                    str(e)[:200],
+                )
                 continue
             else:
-                logger.exception("[fallback] model %s failed with non-retryable error", try_model)
+                logger.exception(
+                    "[fallback] model %s failed with non-retryable error", try_model
+                )
                 raise
 
     # All models failed — backoff until next health check
     if last_error and is_retryable_error(last_error):
-        result = await _backoff_retry_loop(ctx, original_model, tried_models, router_instance, health_checker)
+        result = await _backoff_retry_loop(
+            ctx, original_model, tried_models, router_instance, health_checker
+        )
         if result is not None:
             resp, try_model, mc, api_style, prep_messages, prep_extra = result
             ctx.selected_model = try_model
@@ -689,4 +760,6 @@ async def call_with_fallback(ctx: RequestContext, router_instance: Any, health_c
 
     if last_error:
         raise last_error
-    raise HTTPException(status_code=503, detail="All models were skipped or unavailable")
+    raise HTTPException(
+        status_code=503, detail="All models were skipped or unavailable"
+    )

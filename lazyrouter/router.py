@@ -121,7 +121,9 @@ class LLMRouter:
     def _create_routing_provider(self) -> dict:
         return self._build_routing_params()
 
-    def _estimate_cached_input_price(self, model_config: ModelConfig) -> Optional[float]:
+    def _estimate_cached_input_price(
+        self, model_config: ModelConfig
+    ) -> Optional[float]:
         """Estimate effective input price using conservative cache assumptions."""
         if model_config.input_price is None or model_config.cache_ttl is None:
             return None
@@ -134,7 +136,7 @@ class LLMRouter:
         ) - self.config.router.cache_buffer_seconds
         hot_hits = (
             int(hot_window_seconds // seconds_per_message)
-            if hot_window_seconds > 0 and seconds_per_message > 0
+            if hot_window_seconds > 0
             else 0
         )
 
@@ -142,8 +144,7 @@ class LLMRouter:
         cache_create_input_multiplier = self.config.router.cache_create_input_multiplier
         cache_hit_input_multiplier = self.config.router.cache_hit_input_multiplier
         effective_multiplier = (
-            cache_create_input_multiplier
-            + (hot_hits * cache_hit_input_multiplier)
+            cache_create_input_multiplier + (hot_hits * cache_hit_input_multiplier)
         ) / total_turns
         return model_config.input_price * effective_multiplier
 

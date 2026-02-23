@@ -15,7 +15,10 @@ def test_log_exchange_writes_effective_request_payload(tmp_path):
     log_exchange(
         label=label,
         request_id="req-1",
-        request_data={"model": "auto", "messages": [{"role": "user", "content": "hello"}]},
+        request_data={
+            "model": "auto",
+            "messages": [{"role": "user", "content": "hello"}],
+        },
         request_effective_data={
             "model": "m1",
             "messages": [{"role": "user", "content": "trimmed hello"}],

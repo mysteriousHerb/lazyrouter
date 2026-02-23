@@ -47,15 +47,15 @@ class RouterConfig(BaseModel):
         default=2.0, gt=0
     )  # Conservative cadence for cache cost estimation in routing metadata
     cache_create_input_multiplier: float = Field(
-        default=1.25, ge=0
+        default=1.25, gt=0
     )  # Input cost multiplier on cache creation turn for estimation
     cache_hit_input_multiplier: float = Field(
         default=0.10, ge=0
     )  # Input cost multiplier on cache-hit turns for estimation
 
     @model_validator(mode="after")
-    def validate_prompt_placeholders(self) -> "RouterConfig":
-        """Validate that custom prompt contains required placeholders"""
+    def validate_router_config(self) -> "RouterConfig":
+        """Validate fallback pairing and custom prompt placeholders."""
         if (self.provider_fallback is None) != (self.model_fallback is None):
             raise ValueError(
                 "router.provider_fallback and router.model_fallback must be set together"

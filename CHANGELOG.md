@@ -27,6 +27,7 @@
 - Updated `lazyrouter/server.py` to support all three API styles
 - Updated `lazyrouter/health_checker.py` to work with different provider types
 - Updated `config.example.yaml` with API style examples
+- Improved assistant history prefix cleanup to also handle multipart `content` lists, not only plain strings.
 
 ### Dependencies
 - Added `httpx>=0.27.0` for HTTP client functionality in new providers

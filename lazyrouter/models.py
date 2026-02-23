@@ -110,7 +110,9 @@ class HealthCheckResult(BaseModel):
     actual_model: str
     is_router: bool = False
     status: str  # "ok" or "error"
-    is_healthy: Optional[bool] = None  # True if available for routing (ok status + passes latency check)
+    is_healthy: Optional[bool] = (
+        None  # True if available for routing (ok status + passes latency check)
+    )
     ttft_ms: Optional[float] = None
     ttft_source: Optional[
         Literal["stream_text", "stream_event", "unavailable_non_stream"]

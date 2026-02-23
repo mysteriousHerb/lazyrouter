@@ -1,16 +1,23 @@
 """Tests for cache-aware routing logic"""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from lazyrouter.cache_tracker import (
     _cache_timestamps,
-    cache_tracker_set,
-    cache_tracker_get,
     cache_tracker_clear,
+    cache_tracker_get,
+    cache_tracker_set,
     is_cache_hot,
 )
-from lazyrouter.config import Config, ModelConfig, RouterConfig, ServeConfig, ProviderConfig
+from lazyrouter.config import (
+    Config,
+    ModelConfig,
+    ProviderConfig,
+    RouterConfig,
+    ServeConfig,
+)
 from lazyrouter.models import ChatCompletionRequest, Message
 from lazyrouter.pipeline import RequestContext, call_with_fallback, select_model
 
@@ -217,7 +224,9 @@ async def test_cache_aware_routing_does_not_downgrade_on_hot_cache(mock_config):
     routing_result = MagicMock()
     routing_result.model = "haiku"
     routing_result.reasoning = "Cheaper model is enough"
-    routing_result.raw_response = '{"model": "haiku", "reasoning": "Cheaper model is enough"}'
+    routing_result.raw_response = (
+        '{"model": "haiku", "reasoning": "Cheaper model is enough"}'
+    )
     router.route = AsyncMock(return_value=routing_result)
 
     await select_model(ctx, health_checker, router)
@@ -480,9 +489,12 @@ async def test_call_with_fallback_updates_cache_to_actual_model(mock_config):
     health_checker.unhealthy_models = set()
 
     router_instance = MagicMock()
-    with patch("lazyrouter.pipeline.select_fallback_models", return_value=["sonnet"]), patch(
-        "lazyrouter.pipeline.call_router_with_gemini_fallback",
-        new=AsyncMock(side_effect=[Exception("timeout"), {"id": "ok"}]),
+    with (
+        patch("lazyrouter.pipeline.select_fallback_models", return_value=["sonnet"]),
+        patch(
+            "lazyrouter.pipeline.call_router_with_gemini_fallback",
+            new=AsyncMock(side_effect=[Exception("timeout"), {"id": "ok"}]),
+        ),
     ):
         await call_with_fallback(ctx, router_instance, health_checker)
 

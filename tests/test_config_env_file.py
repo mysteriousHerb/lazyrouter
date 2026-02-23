@@ -116,3 +116,34 @@ def test_load_config_rejects_missing_router_fallback_provider(tmp_path):
 
     with pytest.raises(ValueError, match="Router fallback provider 'backup' not found"):
         load_config(str(config_file))
+
+
+def test_load_config_rejects_zero_cache_create_input_multiplier(tmp_path):
+    """cache_create_input_multiplier must be strictly positive."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        textwrap.dedent(
+            """
+            serve:
+              host: "0.0.0.0"
+              port: 8000
+            router:
+              provider: "openai"
+              model: "fast"
+              cache_create_input_multiplier: 0
+            providers:
+              openai:
+                api_key: "abc"
+            llms:
+              fast:
+                provider: "openai"
+                model: "gpt-4o-mini"
+                description: "Fast model"
+            """
+        ).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="cache_create_input_multiplier"):
+        load_config(str(config_file))

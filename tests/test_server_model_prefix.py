@@ -56,6 +56,7 @@ def test_get_first_response_message_returns_none_for_empty_choices():
 
 # --- _strip_model_prefixes_from_history ---
 
+
 def test_strip_removes_known_model_prefix_from_assistant():
     messages = [
         {"role": "user", "content": "hello"},
@@ -98,8 +99,15 @@ def test_build_prefix_re_matches_known_model():
 
 
 def test_strip_removes_all_stacked_prefixes():
-    messages = [{"role": "assistant", "content": "[gemini-3-flash] [claude-opus-4-6_zzapi] hello"}]
-    result = _strip_model_prefixes_from_history(messages, {"gemini-3-flash", "claude-opus-4-6_zzapi"})
+    messages = [
+        {
+            "role": "assistant",
+            "content": "[gemini-3-flash] [claude-opus-4-6_zzapi] hello",
+        }
+    ]
+    result = _strip_model_prefixes_from_history(
+        messages, {"gemini-3-flash", "claude-opus-4-6_zzapi"}
+    )
     assert result[0]["content"] == "hello"
 
 
@@ -118,7 +126,12 @@ def test_strip_removes_stacked_prefixes_from_assistant_text_part_content_list():
     messages = [
         {
             "role": "assistant",
-            "content": [{"type": "text", "text": "[gemini-3-flash] [claude-opus-4-6_zzapi] hello"}],
+            "content": [
+                {
+                    "type": "text",
+                    "text": "[gemini-3-flash] [claude-opus-4-6_zzapi] hello",
+                }
+            ],
         }
     ]
     result = _strip_model_prefixes_from_history(
@@ -136,4 +149,3 @@ def test_strip_content_list_does_not_mutate_original():
     messages = [original]
     _strip_model_prefixes_from_history(messages, {"gemini-3-flash"})
     assert original["content"][0]["text"] == "[gemini-3-flash] hello"
-

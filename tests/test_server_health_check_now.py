@@ -157,7 +157,7 @@ def test_health_status_includes_router_result_when_present(monkeypatch):
         )
         self.healthy_models = {"m_fast"}
         self.last_check = "2026-02-21T00:00:00+00:00"
-        return list(self.last_results.values()) + [self.last_router_result]
+        return [*self.last_results.values(), self.last_router_result]
 
     monkeypatch.setattr(server_mod.HealthChecker, "run_check", _fake_run_check)
 

@@ -12,7 +12,9 @@ from .error_logger import sanitize_for_log
 logger = logging.getLogger(__name__)
 
 _LOG_DIR = Path("logs/server")
-_LOG_MESSAGE_CONTENT = os.getenv("LAZYROUTER_LOG_MESSAGE_CONTENT", "1").strip().lower() not in {
+_LOG_MESSAGE_CONTENT = os.getenv(
+    "LAZYROUTER_LOG_MESSAGE_CONTENT", "1"
+).strip().lower() not in {
     "0",
     "false",
     "no",
@@ -108,7 +110,9 @@ def log_exchange(
     }
     if request_effective_data is not None:
         entry["request_effective"] = _sanitize_exchange_payload(request_effective_data)
-    entry["request_headers"] = _redact_headers(request_headers) if request_headers else None
+    entry["request_headers"] = (
+        _redact_headers(request_headers) if request_headers else None
+    )
     entry["response"] = _sanitize_exchange_payload(response_data)
     entry["error"] = error
     if extra:

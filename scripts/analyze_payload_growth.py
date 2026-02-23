@@ -53,7 +53,11 @@ def analyze_payload_growth(log_file: Path) -> List[Dict[str, Any]]:
 
             # System prompt size
             system_msg = next(
-                (m for m in messages if isinstance(m, dict) and m.get("role") == "system"),
+                (
+                    m
+                    for m in messages
+                    if isinstance(m, dict) and m.get("role") == "system"
+                ),
                 None,
             )
             system_content = system_msg.get("content", "") if system_msg else ""
@@ -129,7 +133,9 @@ def calculate_savings(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
     total_with_cache = first_request + subsequent_requests
 
     savings = total_without_cache - total_with_cache
-    savings_pct = (savings / total_without_cache * 100) if total_without_cache > 0 else 0
+    savings_pct = (
+        (savings / total_without_cache * 100) if total_without_cache > 0 else 0
+    )
 
     return {
         "avg_static_size": int(avg_static),
@@ -236,7 +242,9 @@ def print_analysis(
                 prompt = usage.get("prompt_tokens", 0)
                 completion = usage.get("completion_tokens", 0)
                 total = usage.get("total_tokens", 0)
-                print(f"{entry['request_num']:>3} {prompt:>10,} {completion:>12,} {total:>10,}")
+                print(
+                    f"{entry['request_num']:>3} {prompt:>10,} {completion:>12,} {total:>10,}"
+                )
         print()
 
     # Savings calculation
@@ -256,7 +264,9 @@ def print_analysis(
     print("WITH CACHING:")
     print(f"  Total payload: {savings['total_with_cache']:,} bytes")
     print(f"  Static sent once: {savings['avg_static_size']:,} bytes")
-    print(f"  History only: {savings['total_with_cache'] - savings['avg_static_size']:,} bytes")
+    print(
+        f"  History only: {savings['total_with_cache'] - savings['avg_static_size']:,} bytes"
+    )
     print()
 
     print("SAVINGS:")
@@ -267,17 +277,15 @@ def print_analysis(
     # Rough estimate: 1 token ~= 4 bytes
     tokens_without_cache = savings["total_without_cache"] / 4
     tokens_with_cache_write = savings["avg_static_size"] / 4
-    tokens_with_cache_read = (savings["total_with_cache"] - savings["avg_static_size"]) / 4
+    tokens_with_cache_read = (
+        savings["total_with_cache"] - savings["avg_static_size"]
+    ) / 4
 
     cost_without = (tokens_without_cache / 1000) * input_price_per_1k
     cost_with = (
         (tokens_with_cache_write / 1000) * cache_write_price_per_1k
         + (tokens_with_cache_read / 1000) * input_price_per_1k
-        + (
-            (savings["avg_static_size"] * (savings["request_count"] - 1))
-            / 4
-            / 1000
-        )
+        + ((savings["avg_static_size"] * (savings["request_count"] - 1)) / 4 / 1000)
         * cache_read_price_per_1k
     )
 
@@ -286,7 +294,9 @@ def print_analysis(
     print(f"  With caching:    ${cost_with:.4f}")
     if cost_without > 0:
         savings_pct = (1 - cost_with / cost_without) * 100
-        print(f"  Savings:         ${cost_without - cost_with:.4f} ({savings_pct:.1f}%)")
+        print(
+            f"  Savings:         ${cost_without - cost_with:.4f} ({savings_pct:.1f}%)"
+        )
     else:
         print(f"  Savings:         ${cost_without - cost_with:.4f} (N/A)")
 

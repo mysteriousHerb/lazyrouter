@@ -6,6 +6,7 @@ from lazyrouter.session_utils import extract_session_key
 
 def _make_request():
     from unittest.mock import MagicMock
+
     req = MagicMock()
     req.model_extra = {}
     return req

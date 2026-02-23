@@ -12,12 +12,12 @@ from pathlib import Path
 from typing import Any, Dict
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _utils import add_source_args, resolve_log_file, SOURCE_DIRS
+from _utils import SOURCE_DIRS, add_source_args, resolve_log_file
 
 
 def analyze_tool_definitions(log_file: Path) -> Dict[str, Any]:
     """Analyze tool definitions from first log entry."""
-    with open(log_file, 'r', encoding='utf-8') as f:
+    with open(log_file, "r", encoding="utf-8") as f:
         first_line = f.readline().strip()
     if not first_line:
         return {"error": "Log file is empty"}
@@ -26,36 +26,32 @@ def analyze_tool_definitions(log_file: Path) -> Dict[str, Any]:
     except json.JSONDecodeError as exc:
         return {"error": f"First log entry is not valid JSON: {exc}"}
 
-    tools = first_entry.get('request', {}).get('tools', [])
+    tools = first_entry.get("request", {}).get("tools", [])
 
-    analysis = {
-        'total_count': len(tools),
-        'total_size': 0,
-        'tools': []
-    }
+    analysis = {"total_count": len(tools), "total_size": 0, "tools": []}
 
     for tool in tools:
         tool_json = json.dumps(tool)
         size = len(tool_json)
 
-        func = tool.get('function', {})
-        name = func.get('name', 'unknown')
-        description = func.get('description', '')
-        params = (func.get('parameters') or {}).get('properties', {})
+        func = tool.get("function", {})
+        name = func.get("name", "unknown")
+        description = func.get("description", "")
+        params = (func.get("parameters") or {}).get("properties", {})
 
         tool_info = {
-            'name': name,
-            'size': size,
-            'description_length': len(description),
-            'param_count': len(params),
-            'params': list(params.keys())
+            "name": name,
+            "size": size,
+            "description_length": len(description),
+            "param_count": len(params),
+            "params": list(params.keys()),
         }
 
-        analysis['tools'].append(tool_info)
-        analysis['total_size'] += size
+        analysis["tools"].append(tool_info)
+        analysis["total_size"] += size
 
     # Sort by size
-    analysis['tools'].sort(key=lambda x: x['size'], reverse=True)
+    analysis["tools"].sort(key=lambda x: x["size"], reverse=True)
 
     return analysis
 
@@ -85,25 +81,31 @@ def print_tool_analysis(analysis: Dict[str, Any]):
     print(f"{'Tool Name':<30} {'Size':>8} {'Params':>7} {'Desc Len':>9}")
     print("-" * 80)
 
-    for tool in analysis['tools']:
-        print(f"{tool['name']:<30} {tool['size']:>8,} {tool['param_count']:>7} {tool['description_length']:>9}")
+    for tool in analysis["tools"]:
+        print(
+            f"{tool['name']:<30} {tool['size']:>8,} {tool['param_count']:>7} {tool['description_length']:>9}"
+        )
 
     print()
     print("TOP 5 LARGEST TOOLS (detailed):")
     print("-" * 80)
 
-    for i, tool in enumerate(analysis['tools'][:5], 1):
+    for i, tool in enumerate(analysis["tools"][:5], 1):
         pct_of_total = (
-            tool["size"] / analysis["total_size"] * 100 if analysis["total_size"] > 0 else 0.0
+            tool["size"] / analysis["total_size"] * 100
+            if analysis["total_size"] > 0
+            else 0.0
         )
         print(f"\n{i}. {tool['name']}")
         print(f"   Size: {tool['size']:,} bytes ({pct_of_total:.1f}% of total)")
         print(f"   Parameters: {tool['param_count']}")
         print(f"   Description length: {tool['description_length']} chars")
-        if tool['param_count'] <= 10:
+        if tool["param_count"] <= 10:
             print(f"   Params: {', '.join(tool['params'])}")
         else:
-            print(f"   Params: {', '.join(tool['params'][:10])}... (+{tool['param_count'] - 10} more)")
+            print(
+                f"   Params: {', '.join(tool['params'][:10])}... (+{tool['param_count'] - 10} more)"
+            )
 
     print()
     print("=" * 80)
@@ -112,7 +114,7 @@ def print_tool_analysis(analysis: Dict[str, Any]):
     print()
 
     # Find tools with long descriptions
-    long_desc_tools = [t for t in analysis['tools'] if t['description_length'] > 200]
+    long_desc_tools = [t for t in analysis["tools"] if t["description_length"] > 200]
     if long_desc_tools:
         print(f"Tools with long descriptions (>200 chars): {len(long_desc_tools)}")
         for tool in long_desc_tools[:5]:
@@ -120,18 +122,24 @@ def print_tool_analysis(analysis: Dict[str, Any]):
         print()
 
     # Find tools with many parameters
-    many_param_tools = [t for t in analysis['tools'] if t['param_count'] > 20]
+    many_param_tools = [t for t in analysis["tools"] if t["param_count"] > 20]
     if many_param_tools:
         print(f"Tools with many parameters (>20): {len(many_param_tools)}")
         for tool in many_param_tools:
-            print(f"  - {tool['name']}: {tool['param_count']} params, {tool['size']:,} bytes")
+            print(
+                f"  - {tool['name']}: {tool['param_count']} params, {tool['size']:,} bytes"
+            )
         print()
 
     # Calculate potential savings
-    top_5_size = sum(t['size'] for t in analysis['tools'][:5])
-    top_5_pct = top_5_size / analysis["total_size"] * 100 if analysis["total_size"] > 0 else 0.0
+    top_5_size = sum(t["size"] for t in analysis["tools"][:5])
+    top_5_pct = (
+        top_5_size / analysis["total_size"] * 100 if analysis["total_size"] > 0 else 0.0
+    )
     print(f"Top 5 tools account for: {top_5_size:,} bytes ({top_5_pct:.1f}% of total)")
-    print(f"Optimizing these 5 tools by 30% would save: {int(top_5_size * 0.3):,} bytes")
+    print(
+        f"Optimizing these 5 tools by 30% would save: {int(top_5_size * 0.3):,} bytes"
+    )
 
 
 def main():
@@ -151,7 +159,7 @@ def main():
 
     # Export to JSON
     output_file = output_dir / "tool_analysis.json"
-    with open(output_file, 'w', encoding='utf-8') as f:
+    with open(output_file, "w", encoding="utf-8") as f:
         json.dump(analysis, f, indent=2)
 
     print()

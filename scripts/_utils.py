@@ -25,14 +25,18 @@ def resolve_log_file(source: str, file: str | None) -> Path:
 
     log_dir = SOURCE_DIRS.get(source)
     if log_dir is None:
-        print(f"Error: Unknown source '{source}'. Choose from: {', '.join(SOURCE_DIRS)}")
+        print(
+            f"Error: Unknown source '{source}'. Choose from: {', '.join(SOURCE_DIRS)}"
+        )
         sys.exit(1)
 
     if not log_dir.exists():
         print(f"Error: Log directory not found: {log_dir}")
         sys.exit(1)
 
-    jsonl_files = sorted(log_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+    jsonl_files = sorted(
+        log_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True
+    )
     if not jsonl_files:
         print(f"Error: No .jsonl files found in {log_dir}")
         sys.exit(1)

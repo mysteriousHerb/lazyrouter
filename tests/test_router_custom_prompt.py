@@ -1,8 +1,9 @@
 """Test custom routing prompt override functionality"""
 
 import asyncio
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from lazyrouter.config import (
     Config,
@@ -12,7 +13,7 @@ from lazyrouter.config import (
     RouterConfig,
     ServeConfig,
 )
-from lazyrouter.router import LLMRouter, ROUTING_PROMPT_TEMPLATE
+from lazyrouter.router import ROUTING_PROMPT_TEMPLATE, LLMRouter
 
 
 def test_default_prompt_includes_explicit_model_request_instruction():
@@ -142,9 +143,7 @@ Choose wisely."""
 
     cfg = Config(
         serve=ServeConfig(),
-        router=RouterConfig(
-            provider="test", model="test-model", prompt=custom_prompt
-        ),
+        router=RouterConfig(provider="test", model="test-model", prompt=custom_prompt),
         providers={"test": ProviderConfig(api_key="test-key", api_style="openai")},
         llms={
             "model-a": ModelConfig(
@@ -200,9 +199,7 @@ Request: {current_request}"""
 
     cfg = Config(
         serve=ServeConfig(),
-        router=RouterConfig(
-            provider="test", model="test-model", prompt=custom_prompt
-        ),
+        router=RouterConfig(provider="test", model="test-model", prompt=custom_prompt),
         providers={"test": ProviderConfig(api_key="test-key", api_style="openai")},
         llms={
             "model-a": ModelConfig(
@@ -229,7 +226,9 @@ Request: {current_request}"""
     }
 
     async def run_test():
-        with patch("litellm.acompletion", return_value=mock_response) as mock_completion:
+        with patch(
+            "litellm.acompletion", return_value=mock_response
+        ) as mock_completion:
             messages = [{"role": "user", "content": "Test request"}]
             result = await router.route(messages)
 
@@ -310,9 +309,7 @@ Request: {current_request}"""
 
     cfg = Config(
         serve=ServeConfig(),
-        router=RouterConfig(
-            provider="test", model="test-model", prompt=invalid_prompt
-        ),
+        router=RouterConfig(provider="test", model="test-model", prompt=invalid_prompt),
         providers={"test": ProviderConfig(api_key="test-key", api_style="openai")},
         llms={
             "model-a": ModelConfig(
@@ -339,7 +336,9 @@ Request: {current_request}"""
     }
 
     async def run_test():
-        with patch("litellm.acompletion", return_value=mock_response) as mock_completion:
+        with patch(
+            "litellm.acompletion", return_value=mock_response
+        ) as mock_completion:
             messages = [{"role": "user", "content": "Test request"}]
             result = await router.route(messages)
 
