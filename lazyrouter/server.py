@@ -113,9 +113,9 @@ def _build_effective_request_for_log(ctx: "RequestContext") -> Dict[str, Any]:
         "message_count_effective": len(ctx.provider_messages),
     }
     if ctx.provider_kwargs:
-        effective.update(ctx.provider_kwargs)
+        effective["provider_kwargs"] = dict(ctx.provider_kwargs)
     if ctx.extra_kwargs:
-        effective.update(ctx.extra_kwargs)
+        effective["extra_kwargs"] = dict(ctx.extra_kwargs)
     if ctx.compression_stats:
         effective["compression_stats"] = ctx.compression_stats
     return effective
@@ -289,10 +289,10 @@ async def _logged_stream(
         "server",
         request_id,
         ctx.request.model_dump(exclude_none=True),
-        _build_effective_request_for_log(ctx),
         None,
         latency_ms,
         True,
+        request_effective_data=_build_effective_request_for_log(ctx),
         extra={"selected_model": ctx.selected_model, "session_key": ctx.session_key},
     )
 
@@ -513,10 +513,10 @@ def create_app(
                     "server",
                     result.get("id", "unknown"),
                     request.model_dump(exclude_none=True),
-                    _build_effective_request_for_log(ctx),
                     result,
                     latency_ms,
                     False,
+                    request_effective_data=_build_effective_request_for_log(ctx),
                     extra={
                         "selected_model": ctx.selected_model,
                         "session_key": ctx.session_key,

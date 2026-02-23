@@ -422,6 +422,10 @@ class LLMRouter:
                         continue
                     raise
 
+            # Defensive sentinel: _get_routing_backends() should always provide at
+            # least one backend, and each loop iteration either breaks on success
+            # (response_dict set) or raises on failure. Keep this guard for
+            # unexpected future control-flow changes.
             if response_dict is None:
                 if last_call_error is not None:
                     raise last_call_error

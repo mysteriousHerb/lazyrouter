@@ -1,5 +1,6 @@
 """Configuration loading and validation"""
 
+import logging
 import os
 import re
 from pathlib import Path
@@ -8,6 +9,8 @@ from typing import Any, Dict, Optional
 import yaml
 from dotenv import find_dotenv, load_dotenv
 from pydantic import BaseModel, Field, model_validator
+
+logger = logging.getLogger(__name__)
 
 
 class ServeConfig(BaseModel):
@@ -261,5 +264,17 @@ def load_config(
         raise ValueError(
             f"Router fallback provider '{config.router.provider_fallback}' not found in providers"
         )
+    if config.router.model_fallback:
+        model_fallback = config.router.model_fallback
+        advertised = any(
+            llm.model == model_fallback
+            and llm.provider == config.router.provider_fallback
+            for llm in config.llms.values()
+        ) or any(llm.model == model_fallback for llm in config.llms.values())
+        if not advertised:
+            logger.warning(
+                "router.model_fallback '%s' is not advertised by configured llms; it will be resolved by provider runtime",
+                model_fallback,
+            )
 
     return config

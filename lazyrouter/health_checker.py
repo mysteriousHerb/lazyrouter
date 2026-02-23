@@ -1,4 +1,4 @@
-﻿"""Periodic health checker that benchmarks models and tracks availability"""
+"""Periodic health checker that benchmarks models and tracks availability"""
 
 import asyncio
 import json
@@ -329,24 +329,16 @@ class HealthChecker:
         model_names = []
         router_provider_name = self.config.router.provider
         router_model = self.config.router.model
-        router_api_key = self.config.get_api_key(router_provider_name)
-        router_base_url = self.config.get_base_url(router_provider_name)
-        router_api_style = self.config.get_api_style(router_provider_name)
-        router_provider = LiteLLMWrapper(
-            router_api_key, router_base_url, router_api_style, router_model
-        )
-        router_task = asyncio.wait_for(
-            check_model_health(
-                router_model,
-                router_provider,
-                router_model,
-                router_provider_name,
-                is_router=True,
-            ),
-            timeout=self.hc_config.max_latency_ms / 1000 + 5,  # generous timeout
-        )
+        router_probe_source_model_name: Optional[str] = None
 
         for model_name, model_config in self.config.llms.items():
+            if (
+                model_config.provider == router_provider_name
+                and model_config.model == router_model
+                and router_probe_source_model_name is None
+            ):
+                router_probe_source_model_name = model_name
+
             api_key = self.config.get_api_key(model_config.provider)
             base_url = self.config.get_base_url(model_config.provider)
             api_style = self.config.get_api_style(model_config.provider)
@@ -365,9 +357,32 @@ class HealthChecker:
                 )
             )
 
-        gathered = await asyncio.gather(*tasks, router_task, return_exceptions=True)
-        raw_results = gathered[:-1]
-        raw_router_result = gathered[-1]
+        router_task = None
+        if router_probe_source_model_name is None:
+            router_api_key = self.config.get_api_key(router_provider_name)
+            router_base_url = self.config.get_base_url(router_provider_name)
+            router_api_style = self.config.get_api_style(router_provider_name)
+            router_provider = LiteLLMWrapper(
+                router_api_key, router_base_url, router_api_style, router_model
+            )
+            router_task = asyncio.wait_for(
+                check_model_health(
+                    router_model,
+                    router_provider,
+                    router_model,
+                    router_provider_name,
+                    is_router=True,
+                ),
+                timeout=self.hc_config.max_latency_ms / 1000 + 5,  # generous timeout
+            )
+
+        if router_task is None:
+            raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+            raw_router_result = None
+        else:
+            gathered = await asyncio.gather(*tasks, router_task, return_exceptions=True)
+            raw_results = gathered[:-1]
+            raw_router_result = gathered[-1]
 
         results = []
         results_by_model: Dict[str, HealthCheckResult] = {}
@@ -411,7 +426,46 @@ class HealthChecker:
                 results_by_model[name] = result
                 logger.warning(f"Health check: {name} unhealthy - {err}")
 
-        if isinstance(raw_router_result, HealthCheckResult):
+        if router_probe_source_model_name is not None:
+            source_result = results_by_model.get(router_probe_source_model_name)
+            if source_result is not None:
+                router_result = source_result.model_copy(
+                    update={
+                        "model": router_model,
+                        "provider": router_provider_name,
+                        "actual_model": router_model,
+                        "is_router": True,
+                    }
+                )
+                if not router_result.is_healthy:
+                    reason = (
+                        router_result.error
+                        if router_result.status == "error"
+                        else (
+                            "total_ms unavailable"
+                            if router_result.total_ms is None
+                            else f"total_ms={router_result.total_ms} > {self.hc_config.max_latency_ms}"
+                        )
+                    )
+                    logger.warning(
+                        "Health check: router model unhealthy - %s (shared probe from %s)",
+                        reason,
+                        router_probe_source_model_name,
+                    )
+            else:
+                router_result = HealthCheckResult(
+                    model=router_model,
+                    provider=router_provider_name,
+                    actual_model=router_model,
+                    is_router=True,
+                    status="error",
+                    is_healthy=False,
+                    error="Shared router probe source model result missing",
+                )
+                logger.warning(
+                    "Health check: router model unhealthy - shared probe source result missing"
+                )
+        elif isinstance(raw_router_result, HealthCheckResult):
             router_result = raw_router_result
             router_result.is_healthy = is_result_healthy(
                 router_result, self.hc_config.max_latency_ms

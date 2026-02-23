@@ -3,11 +3,35 @@
 import argparse
 import sys
 from pathlib import Path
+from typing import Any
 
 SOURCE_DIRS = {
     "server": Path("logs/server"),
     "test_proxy": Path("logs/test_proxy"),
 }
+
+
+def content_to_text(content: Any) -> str:
+    """Normalize mixed content payloads into plain text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                text = block.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+                else:
+                    parts.append(str(block))
+            else:
+                parts.append(str(block))
+        return "\n".join(parts)
+    if content is None:
+        return ""
+    return str(content)
 
 
 def resolve_log_file(source: str, file: str | None) -> Path:

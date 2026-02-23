@@ -190,9 +190,11 @@ def _strip_model_prefixes_from_history(messages: list, known_models: set) -> lis
 
     def _strip_prefixes(text: str) -> str:
         stripped = text
-        while prefix_re.match(stripped):
-            stripped = prefix_re.sub("", stripped, count=1)
-        return stripped
+        while True:
+            updated = prefix_re.sub("", stripped)
+            if updated == stripped:
+                return stripped
+            stripped = updated
 
     result = []
     for msg in messages:

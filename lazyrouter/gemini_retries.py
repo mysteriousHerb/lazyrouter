@@ -104,7 +104,7 @@ async def apply_gemini_stream_retries(
     retried_tool_schema: bool,
     retried_tool_schema_camel: bool,
     retried_without_tools: bool,
-) -> tuple:
+) -> tuple[bool, str, bool, bool, bool]:
     """Attempt Gemini-specific stream retries.
 
     Returns (did_retry, err_text, retried_tool_schema, retried_tool_schema_camel, retried_without_tools).
@@ -138,17 +138,18 @@ async def apply_gemini_stream_retries(
         )
         try:
             await replace_stream_fn(retry_extra)
+        except Exception as e:
+            err_text = str(e)
+            logger.warning(
+                "[gemini-tools] function_declarations retry failed: %s", err_text[:280]
+            )
+        else:
             return (
                 True,
                 err_text,
                 retried_tool_schema,
                 retried_tool_schema_camel,
                 retried_without_tools,
-            )
-        except Exception as e:
-            err_text = str(e)
-            logger.warning(
-                "[gemini-tools] function_declarations retry failed: %s", err_text[:280]
             )
 
     if is_gemini_tool_type_proto_error(err_text) and not retried_tool_schema_camel:
@@ -163,17 +164,18 @@ async def apply_gemini_stream_retries(
         )
         try:
             await replace_stream_fn(retry_extra)
+        except Exception as e:
+            err_text = str(e)
+            logger.warning(
+                "[gemini-tools] functionDeclarations retry failed: %s", err_text[:280]
+            )
+        else:
             return (
                 True,
                 err_text,
                 retried_tool_schema,
                 retried_tool_schema_camel,
                 retried_without_tools,
-            )
-        except Exception as e:
-            err_text = str(e)
-            logger.warning(
-                "[gemini-tools] functionDeclarations retry failed: %s", err_text[:280]
             )
 
     if (
@@ -191,18 +193,19 @@ async def apply_gemini_stream_retries(
         )
         try:
             await replace_stream_fn(retry_extra)
+        except Exception as e:
+            err_text = str(e)
+            logger.warning(
+                "[gemini-tools] continuation-without-tools retry failed: %s",
+                err_text[:280],
+            )
+        else:
             return (
                 True,
                 err_text,
                 retried_tool_schema,
                 retried_tool_schema_camel,
                 retried_without_tools,
-            )
-        except Exception as e:
-            err_text = str(e)
-            logger.warning(
-                "[gemini-tools] continuation-without-tools retry failed: %s",
-                err_text[:280],
             )
 
     return (

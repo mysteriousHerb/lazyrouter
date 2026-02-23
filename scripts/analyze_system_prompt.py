@@ -13,30 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _utils import SOURCE_DIRS, add_source_args, resolve_log_file
-
-
-def _content_to_text(content: Any) -> str:
-    """Normalize message content into plain text."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: List[str] = []
-        for block in content:
-            if isinstance(block, str):
-                parts.append(block)
-            elif isinstance(block, dict):
-                text = block.get("text")
-                if isinstance(text, str):
-                    parts.append(text)
-                else:
-                    parts.append(str(block))
-            else:
-                parts.append(str(block))
-        return "\n".join(parts)
-    if content is None:
-        return ""
-    return str(content)
+from _utils import SOURCE_DIRS, add_source_args, content_to_text, resolve_log_file
 
 
 def extract_sections(system_prompt: str) -> List[Tuple[str, int, int, int]]:
@@ -125,7 +102,7 @@ def categorize_sections(
     return categories
 
 
-def analyze_system_prompt(log_file: Path) -> Dict:
+def analyze_system_prompt(log_file: Path) -> Dict[str, Any]:
     """Analyze system prompt from first log entry."""
     with open(log_file, "r", encoding="utf-8") as f:
         first_line = f.readline().strip()
@@ -142,14 +119,14 @@ def analyze_system_prompt(log_file: Path) -> Dict:
     if not system_msg:
         return {"error": "No system message found"}
 
-    system_prompt = _content_to_text(system_msg.get("content", ""))
+    system_prompt = content_to_text(system_msg.get("content", ""))
     lines = system_prompt.split("\n") if system_prompt else []
 
     sections = extract_sections(system_prompt)
     categories = categorize_sections(sections)
 
     return {
-        "total_size": len(system_prompt),
+        "total_size": len(system_prompt.encode("utf-8")),
         "total_lines": len(lines),
         "section_count": len(sections),
         "sections": sections,
@@ -157,7 +134,7 @@ def analyze_system_prompt(log_file: Path) -> Dict:
     }
 
 
-def print_analysis(analysis: Dict):
+def print_analysis(analysis: Dict[str, Any]) -> None:
     """Print formatted analysis."""
     print("=" * 80)
     print("SYSTEM PROMPT STRUCTURE ANALYSIS")
@@ -251,7 +228,7 @@ def print_analysis(analysis: Dict):
     )
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Analyze system prompt structure from logs."
     )

@@ -78,10 +78,10 @@ def log_exchange(
     label: str,
     request_id: str,
     request_data: Dict[str, Any],
-    request_effective_data: Optional[Dict[str, Any]],
     response_data: Any,
     latency_ms: float,
     is_stream: bool,
+    request_effective_data: Optional[Dict[str, Any]] = None,
     error: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
     request_headers: Optional[Dict[str, str]] = None,
@@ -92,10 +92,10 @@ def log_exchange(
         label: Log file label (e.g. api_style for proxy, 'server' for normal server).
         request_id: Unique request identifier.
         request_data: The request payload dict.
-        request_effective_data: Optional processed request payload (e.g. trimmed/sanitized).
         response_data: The response payload (dict or None).
         latency_ms: Round-trip latency in milliseconds.
         is_stream: Whether the request was streamed.
+        request_effective_data: Optional processed request payload (e.g. trimmed/sanitized).
         error: Optional error string if the request failed.
         extra: Optional extra fields to include (e.g. routing metadata).
         request_headers: Optional request headers (sensitive values will be redacted).
@@ -126,7 +126,7 @@ def log_exchange(
         logger.warning("Failed to write exchange log (%s): %s", log_path, log_error)
         return
 
-    logger.debug(
+    logger.info(
         "[exchange] label=%s id=%s stream=%s latency=%.0fms",
         label,
         request_id[:8],

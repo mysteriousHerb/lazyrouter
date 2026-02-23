@@ -16,36 +16,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _utils import SOURCE_DIRS, add_source_args, resolve_log_file
+from _utils import SOURCE_DIRS, add_source_args, content_to_text, resolve_log_file
 from analyze_system_prompt import extract_sections
 
 
 def _serialized_size_bytes(value: Any) -> int:
     """Approximate payload size in bytes using JSON serialization."""
     return len(json.dumps(value, ensure_ascii=False, default=str).encode("utf-8"))
-
-
-def _content_to_text(content: Any) -> str:
-    """Normalize message content into plain text."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: List[str] = []
-        for block in content:
-            if isinstance(block, str):
-                parts.append(block)
-            elif isinstance(block, dict):
-                text = block.get("text")
-                if isinstance(text, str):
-                    parts.append(text)
-                else:
-                    parts.append(str(block))
-            else:
-                parts.append(str(block))
-        return "\n".join(parts)
-    if content is None:
-        return ""
-    return str(content)
 
 
 def analyze_message_sizes(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -84,7 +61,7 @@ def analyze_tools(tools: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def analyze_system_prompt(system_content: Any) -> Dict[str, Any]:
     """Analyze system prompt structure using shared section extraction."""
-    system_text = _content_to_text(system_content)
+    system_text = content_to_text(system_content)
     lines = system_text.split("\n") if system_text else []
     sections = extract_sections(system_text)
     section_map = {name: size for name, _start, _line_count, size in sections}

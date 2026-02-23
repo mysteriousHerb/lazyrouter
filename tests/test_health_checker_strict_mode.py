@@ -77,6 +77,7 @@ def test_health_checker_tracks_router_probe_result(monkeypatch):
     assert checker.last_router_result is not None
     assert checker.last_router_result.is_router is True
     assert checker.last_router_result.model == "m1"
+    # _fake_bench does not set is_healthy; HealthChecker.run_check derives it.
     assert checker.last_router_result.is_healthy is True
 
 
@@ -109,3 +110,35 @@ def test_health_checker_retries_three_times_when_all_unhealthy(monkeypatch):
     # 2 model probes + 1 router probe, across 1 initial + 3 retry passes.
     assert calls["count"] == 12
     assert checker.healthy_models == set()
+
+
+def test_health_checker_reuses_matching_llm_probe_for_router(monkeypatch):
+    monkeypatch.setattr(hc_mod, "ALL_UNHEALTHY_RECHECK_ATTEMPTS", 0)
+    monkeypatch.setattr(hc_mod, "ALL_UNHEALTHY_RECHECK_DELAY_SECONDS", 0.0)
+
+    calls = {"count": 0}
+
+    async def _fake_bench(*args, **kwargs):
+        calls["count"] += 1
+        return HealthCheckResult(
+            model=args[0],
+            provider=args[3],
+            actual_model=args[2],
+            is_router=bool(kwargs.get("is_router", False)),
+            status="ok",
+            total_ms=5.0,
+        )
+
+    monkeypatch.setattr(hc_mod, "check_model_health", _fake_bench)
+
+    cfg = _config().model_copy(
+        update={"router": RouterConfig(provider="p1", model="model-one")}
+    )
+    checker = hc_mod.HealthChecker(cfg)
+    asyncio.run(checker.run_check())
+
+    # Only configured llms are probed (m1 + m2); router row reuses matching m1 probe.
+    assert calls["count"] == 2
+    assert checker.last_router_result is not None
+    assert checker.last_router_result.is_router is True
+    assert checker.last_router_result.actual_model == "model-one"

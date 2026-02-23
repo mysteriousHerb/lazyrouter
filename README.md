@@ -129,7 +129,7 @@ The router will honor these explicit requests and route to the specified model.
 
 ### Model Prefix Hygiene
 
-When `serve.show_model_prefix` is enabled, LazyRouter strips known `[model-name] ` prefixes from assistant history before upstream calls. This works for plain string content and assistant `content` part lists (for multimodal/tool-use style messages).
+When `serve.show_model_prefix` is enabled, LazyRouter strips known `[model-name]` prefixes from assistant history before upstream calls. This works for plain string content and assistant `content` part lists (for multimodal/tool-use style messages).
 
 
 ## OpenClaw Integration
