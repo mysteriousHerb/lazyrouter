@@ -1,6 +1,7 @@
 """FastAPI server with OpenAI-compatible endpoints"""
 
 import json
+import secrets
 import logging
 import time
 from typing import Any, Dict
@@ -51,12 +52,13 @@ health_checker: HealthChecker = None
 security = HTTPBearer(auto_error=False)
 
 
-async def verify_api_key(
+def verify_api_key(
     auth: HTTPAuthorizationCredentials | None = Depends(security),
 ) -> None:
     """Verify API key from Bearer token."""
-    # If no API key is configured, allow all requests
-    if config is None or not config.serve.api_key:
+    # If no API key is configured (None), allow all requests.
+    # Empty string is treated as configured but invalid (fail closed).
+    if config is None or config.serve.api_key is None:
         return
 
     if not auth:
@@ -66,7 +68,7 @@ async def verify_api_key(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    if auth.credentials != config.serve.api_key:
+    if not secrets.compare_digest(auth.credentials, config.serve.api_key):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API Key",

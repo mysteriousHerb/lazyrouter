@@ -1,5 +1,4 @@
 from fastapi.testclient import TestClient
-from unittest.mock import AsyncMock, MagicMock
 
 import lazyrouter.server as server_mod
 from lazyrouter.config import (
@@ -11,9 +10,9 @@ from lazyrouter.config import (
     ServeConfig,
 )
 
-def _config_with_auth() -> Config:
+def _config_with_auth(api_key: str | None = "secret-key") -> Config:
     return Config(
-        serve=ServeConfig(api_key="secret-key"),
+        serve=ServeConfig(api_key=api_key),
         router=RouterConfig(provider="p1", model="m_fast"),
         providers={"p1": ProviderConfig(api_key="test-key", api_style="openai")},
         llms={
@@ -67,12 +66,10 @@ def test_chat_completion_no_auth_fails(monkeypatch):
             },
         )
 
-    # NOW IT SHOULD BE 401
+    # Note: with HTTPBearer(auto_error=False), missing Authorization headers result in
+    # credentials=None; our verify_api_key function then raises the 401 when API key
+    # authentication is configured.
     assert response.status_code == 401
-    # Note: HTTPBearer auto_error=False does not return 401 automatically if header missing,
-    # but our verify_api_key raises it manually if config is set.
-    # However, if HTTPBearer(auto_error=True) was used, it would return 403.
-    # We used auto_error=False, so we control it.
 
 def test_chat_completion_valid_auth_succeeds(monkeypatch):
     setup_mocks(monkeypatch)
@@ -108,3 +105,39 @@ def test_chat_completion_invalid_auth_fails(monkeypatch):
 
     assert response.status_code == 401
     assert "Invalid API Key" in response.json()["detail"]
+
+def test_chat_completion_no_api_key_config_allows_unauthenticated(monkeypatch):
+    setup_mocks(monkeypatch)
+    # Configure the server with no API key (None) so verify_api_key should allow all requests.
+    app = server_mod.create_app(preloaded_config=_config_with_auth(api_key=None))
+
+    with TestClient(app) as client:
+        # Request WITHOUT Authorization header should succeed when no API key is configured
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "m_fast",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+    assert response.status_code == 200
+
+def test_chat_completion_empty_api_key_config_fails_closed(monkeypatch):
+    setup_mocks(monkeypatch)
+    # Configure the server with EMPTY string API key.
+    # This should be treated as "configured but invalid" (fail closed).
+
+    app = server_mod.create_app(preloaded_config=_config_with_auth(api_key=""))
+
+    with TestClient(app) as client:
+        # Request WITHOUT Authorization header
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "m_fast",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+    # Should be 401 because auth is missing
+    assert response.status_code == 401
