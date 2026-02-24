@@ -86,6 +86,7 @@ class LLMRouter:
 
         # Initialize routing logger
         self.routing_logger = RoutingLogger()
+        self._cached_full_descriptions = None
 
     def _get_litellm_params(self, provider_name: str, model: str) -> dict:
         """Build LiteLLM parameters for a provider"""
@@ -150,6 +151,8 @@ class LLMRouter:
 
     def _build_model_descriptions(self, exclude_models: Optional[set] = None) -> str:
         """Build formatted string of model descriptions for routing prompt"""
+        if not exclude_models and self._cached_full_descriptions:
+            return self._cached_full_descriptions
         descriptions = []
         for model_name, model_config in self.config.llms.items():
             if exclude_models and model_name in exclude_models:
@@ -177,7 +180,10 @@ class LLMRouter:
             if meta:
                 parts.append(f"  [{', '.join(meta)}]")
             descriptions.append("".join(parts))
-        return "\n".join(descriptions)
+        result = "\n".join(descriptions)
+        if not exclude_models:
+            self._cached_full_descriptions = result
+        return result
 
     @staticmethod
     def _summarize_tool_calls_for_router(
