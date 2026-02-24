@@ -338,20 +338,44 @@ def compress_messages(
         [m for m in compressed if m is not None], model=model
     )
 
+    # Determine conversation overhead once to allow efficient O(1) updates
+    # to total_tokens when dropping messages, instead of O(N) re-estimation.
+    try:
+        _dummy = {"role": "user", "content": "a"}
+        _t1 = _estimate_messages_tokens([_dummy], model=model)
+        _t2 = _estimate_messages_tokens([_dummy, _dummy], model=model)
+        conversation_overhead = max(0, 2 * _t1 - _t2)
+    except Exception:
+        conversation_overhead = 3
+
+    remaining_count = len([m for m in compressed if m is not None])
+
     for strict_phase in (True, False):
         for unit in _drop_candidates(preferred_unprotected_only=strict_phase):
             if total_tokens <= config.max_history_tokens:
                 break
+
+            unit_messages = []
             dropped_count = 0
             for idx in unit:
                 if compressed[idx] is None:
                     continue
+                unit_messages.append(compressed[idx])
                 compressed[idx] = None
                 dropped_count += 1
+
+            if dropped_count == 0:
+                continue
+
             stats.messages_dropped += dropped_count
-            total_tokens = _estimate_messages_tokens(
-                [m for m in compressed if m is not None], model=model
-            )
+            remaining_count -= dropped_count
+
+            if remaining_count <= 0:
+                total_tokens = 0
+            else:
+                unit_tokens = _estimate_messages_tokens(unit_messages, model=model)
+                total_tokens = max(0, total_tokens - unit_tokens + conversation_overhead)
+
         if total_tokens <= config.max_history_tokens:
             break
 
