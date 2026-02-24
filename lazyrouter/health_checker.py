@@ -619,4 +619,3 @@ class HealthChecker:
         if self._task:
             self._task.cancel()
             self._task = None
-
