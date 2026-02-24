@@ -6,11 +6,14 @@ This module intentionally avoids LLM-dependent compression. It only provides:
 """
 
 import copy
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from .message_utils import content_to_text
 from .usage_logger import estimate_messages_tokens, estimate_tokens
+
+logger = logging.getLogger(__name__)
 
 INSTRUCTION_ROLES = {"system", "developer"}
 DEFAULT_HISTORY_BUDGET = 16000
@@ -18,6 +21,7 @@ DEFAULT_HISTORY_BUDGET = 16000
 # large user hard-caps do not collapse/disable progressive trimming behavior.
 MIN_HISTORY_BUDGET = 2000
 MAX_HISTORY_BUDGET = 32000
+DEFAULT_CONVERSATION_OVERHEAD = 3
 
 # Heuristic ratios for deriving progressive caps from budget + message density.
 # Tuned to keep near-old messages reasonably informative while compressing
@@ -345,8 +349,13 @@ def compress_messages(
         _t1 = _estimate_messages_tokens([_dummy], model=model)
         _t2 = _estimate_messages_tokens([_dummy, _dummy], model=model)
         conversation_overhead = max(0, 2 * _t1 - _t2)
-    except Exception:
-        conversation_overhead = 3
+    except Exception as e:
+        logger.warning(
+            "Failed to calculate dynamic conversation overhead, defaulting to %s: %s",
+            DEFAULT_CONVERSATION_OVERHEAD,
+            e,
+        )
+        conversation_overhead = DEFAULT_CONVERSATION_OVERHEAD
 
     remaining_count = len([m for m in compressed if m is not None])
 
