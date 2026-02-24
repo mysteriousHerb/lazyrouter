@@ -72,6 +72,75 @@ _PASSTHROUGH_EXCLUDE = {
 }
 
 
+def _extract_tool_name(tool: Any) -> Optional[str]:
+    """Extract a tool name from supported OpenAI-compatible tool shapes."""
+    if not isinstance(tool, dict):
+        return None
+
+    function_payload = tool.get("function")
+    if isinstance(function_payload, dict):
+        name = function_payload.get("name")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+
+    name = tool.get("name")
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+
+    return None
+
+
+def _filter_tools_for_model(
+    tools: List[Any],
+    model_name: str,
+    model_config: Optional["ModelConfig"],
+    cfg: "Config",
+) -> List[Any]:
+    """Apply configured tool filtering for non-cacheable models."""
+    filter_cfg = getattr(cfg, "tool_filtering", None)
+    if not filter_cfg or not getattr(filter_cfg, "enabled", False):
+        return tools
+
+    if (
+        getattr(filter_cfg, "disable_for_cacheable_models", True)
+        and model_config
+        and model_config.cache_ttl
+    ):
+        logger.debug(
+            "[tool-filter] skipped for cacheable model=%s (cache_ttl=%s)",
+            model_name,
+            model_config.cache_ttl,
+        )
+        return tools
+
+    allowed_names = {
+        str(name).strip()
+        for name in getattr(filter_cfg, "always_included", [])
+        if str(name).strip()
+    }
+    if not allowed_names:
+        return tools
+
+    filtered_tools = [
+        tool for tool in tools if _extract_tool_name(tool) in allowed_names
+    ]
+    if not filtered_tools:
+        logger.warning(
+            "[tool-filter] no tools matched allowlist for model=%s; using full set (%d)",
+            model_name,
+            len(tools),
+        )
+        return tools
+
+    logger.info(
+        "[tool-filter] model=%s filtered tools %d -> %d",
+        model_name,
+        len(tools),
+        len(filtered_tools),
+    )
+    return filtered_tools
+
+
 @dataclasses.dataclass
 class RequestContext:
     """Carries all mutable state through the chat completions pipeline."""
@@ -134,7 +203,7 @@ def _prepare_for_model(
         prep_messages = sanitize_messages_for_gemini(messages)
 
     if request.tools:
-        tools = request.tools
+        tools = _filter_tools_for_model(request.tools, model_name, mc, cfg)
         if api_style == "anthropic":
             prep_extra["tools"] = sanitize_tool_schema_for_anthropic(tools)
         elif api_style == "gemini":

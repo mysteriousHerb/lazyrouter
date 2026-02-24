@@ -13,6 +13,7 @@ from lazyrouter.config import (
     ProviderConfig,
     RouterConfig,
     ServeConfig,
+    ToolFilteringConfig,
 )
 from lazyrouter.models import ChatCompletionRequest
 from lazyrouter.pipeline import (
@@ -254,6 +255,135 @@ def test_prepare_provider_passes_tools():
     prepare_provider(ctx)
 
     assert "tools" in ctx.extra_kwargs
+    assert ctx.extra_kwargs["tools"] == tools
+
+
+def test_prepare_provider_filters_tools_for_non_cacheable_models():
+    cfg = Config(
+        serve=ServeConfig(),
+        router=RouterConfig(provider="p1", model="m1"),
+        providers={"p1": ProviderConfig(api_key="k", api_style="openai")},
+        llms={"m1": ModelConfig(provider="p1", model="gpt-test", description="openai")},
+        tool_filtering=ToolFilteringConfig(
+            enabled=True,
+            disable_for_cacheable_models=True,
+            always_included=["read"],
+        ),
+        health_check=HealthCheckConfig(enabled=False),
+    )
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "write",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+    ]
+    req = _request(tools=tools)
+    ctx = _ctx(request=req, config=cfg)
+    ctx.messages = [{"role": "user", "content": "hi"}]
+    ctx.selected_model = "m1"
+    ctx.model_config = cfg.llms["m1"]
+
+    prepare_provider(ctx)
+
+    result_tools = ctx.extra_kwargs["tools"]
+    assert len(result_tools) == 1
+    assert result_tools[0]["function"]["name"] == "read"
+
+
+def test_prepare_provider_skips_filtering_for_cacheable_models():
+    cfg = Config(
+        serve=ServeConfig(),
+        router=RouterConfig(provider="p1", model="m1"),
+        providers={"p1": ProviderConfig(api_key="k", api_style="openai")},
+        llms={
+            "m1": ModelConfig(
+                provider="p1",
+                model="claude-sonnet",
+                description="cacheable",
+                cache_ttl=5,
+            )
+        },
+        tool_filtering=ToolFilteringConfig(
+            enabled=True,
+            disable_for_cacheable_models=True,
+            always_included=["read"],
+        ),
+        health_check=HealthCheckConfig(enabled=False),
+    )
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "write",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+    ]
+    req = _request(tools=tools)
+    ctx = _ctx(request=req, config=cfg)
+    ctx.messages = [{"role": "user", "content": "hi"}]
+    ctx.selected_model = "m1"
+    ctx.model_config = cfg.llms["m1"]
+
+    prepare_provider(ctx)
+
+    assert ctx.extra_kwargs["tools"] == tools
+
+
+def test_prepare_provider_filter_fallbacks_to_full_tools_when_allowlist_empty_match():
+    cfg = Config(
+        serve=ServeConfig(),
+        router=RouterConfig(provider="p1", model="m1"),
+        providers={"p1": ProviderConfig(api_key="k", api_style="openai")},
+        llms={"m1": ModelConfig(provider="p1", model="gpt-test", description="openai")},
+        tool_filtering=ToolFilteringConfig(
+            enabled=True,
+            disable_for_cacheable_models=True,
+            always_included=["missing_tool"],
+        ),
+        health_check=HealthCheckConfig(enabled=False),
+    )
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "write",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+    ]
+    req = _request(tools=tools)
+    ctx = _ctx(request=req, config=cfg)
+    ctx.messages = [{"role": "user", "content": "hi"}]
+    ctx.selected_model = "m1"
+    ctx.model_config = cfg.llms["m1"]
+
+    prepare_provider(ctx)
+
     assert ctx.extra_kwargs["tools"] == tools
 
 

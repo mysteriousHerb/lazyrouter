@@ -4,7 +4,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import yaml
 from dotenv import find_dotenv, load_dotenv
@@ -137,6 +137,14 @@ class ContextCompressionConfig(BaseModel):
         return data
 
 
+class ToolFilteringConfig(BaseModel):
+    """Tool filtering settings for reducing tool-schema tokens."""
+
+    enabled: bool = True
+    disable_for_cacheable_models: bool = True
+    always_included: List[str] = Field(default_factory=list)
+
+
 class HealthCheckConfig(BaseModel):
     """Periodic health check settings"""
 
@@ -166,6 +174,7 @@ class Config(BaseModel):
     providers: Dict[str, ProviderConfig]
     llms: Dict[str, ModelConfig]
     context_compression: ContextCompressionConfig = ContextCompressionConfig()
+    tool_filtering: ToolFilteringConfig = ToolFilteringConfig()
     health_check: HealthCheckConfig = HealthCheckConfig()
 
     def get_api_key(self, provider: str) -> str:
