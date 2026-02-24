@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import functools
 import logging
 import re
 import time
@@ -176,7 +177,8 @@ def _prepare_for_model(
 # ---------------------------------------------------------------------------
 
 
-def _build_prefix_re(known_models: set) -> re.Pattern:
+@functools.lru_cache(maxsize=1)
+def _build_prefix_re(known_models: tuple) -> re.Pattern:
     """Build a regex that matches only known model name prefixes like [model-name] ."""
     escaped = sorted((re.escape(m) for m in known_models), key=len, reverse=True)
     return re.compile(r"^\[(?:" + "|".join(escaped) + r")\] ")
@@ -186,7 +188,7 @@ def _strip_model_prefixes_from_history(messages: list, known_models: set) -> lis
     """Remove [model-name] prefixes from assistant messages before sending upstream."""
     if not known_models:
         return messages
-    prefix_re = _build_prefix_re(known_models)
+    prefix_re = _build_prefix_re(tuple(sorted(known_models)))
 
     def _strip_prefixes(text: str) -> str:
         stripped = text

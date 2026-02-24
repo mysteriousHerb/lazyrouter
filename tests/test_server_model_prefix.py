@@ -92,7 +92,7 @@ def test_strip_does_not_mutate_original_message():
 
 
 def test_build_prefix_re_matches_known_model():
-    pattern = _build_prefix_re({"gemini-3-flash", "claude-opus-4-6"})
+    pattern = _build_prefix_re(("gemini-3-flash", "claude-opus-4-6"))
     assert pattern.match("[gemini-3-flash] hello")
     assert pattern.match("[claude-opus-4-6] hello")
     assert not pattern.match("[unknown-model] hello")
