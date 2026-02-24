@@ -156,6 +156,30 @@ async def check_model_health(
     ttft_unavailable_reason = None
     total_ms = None
     first_event_ms = None
+
+    def create_result(
+        status: str,
+        ttft_ms: Optional[float],
+        ttft_source: Optional[str],
+        ttft_unavailable_reason: Optional[str],
+        total_ms: Optional[float],
+        is_healthy: Optional[bool] = None,
+        error: Optional[str] = None,
+    ) -> HealthCheckResult:
+        return HealthCheckResult(
+            model=name,
+            provider=provider_name,
+            actual_model=actual_model,
+            is_router=is_router,
+            status=status,
+            is_healthy=is_healthy,
+            ttft_ms=ttft_ms,
+            ttft_source=ttft_source,
+            ttft_unavailable_reason=ttft_unavailable_reason,
+            total_ms=total_ms,
+            error=error,
+        )
+
     try:
         t0 = time.monotonic()
         stream = await provider.chat_completion(
@@ -185,11 +209,7 @@ async def check_model_health(
 
         total_ms = round((time.monotonic() - t0) * 1000, 1)
 
-        return HealthCheckResult(
-            model=name,
-            provider=provider_name,
-            actual_model=actual_model,
-            is_router=is_router,
+        return create_result(
             status="ok",
             is_healthy=None,  # Set later in run_check based on latency threshold
             ttft_ms=ttft_ms,
@@ -221,11 +241,7 @@ async def check_model_health(
                 max_tokens=BENCH_MAX_TOKENS,
             )
             total_ms = round((time.monotonic() - t0) * 1000, 1)
-            return HealthCheckResult(
-                model=name,
-                provider=provider_name,
-                actual_model=actual_model,
-                is_router=is_router,
+            return create_result(
                 status="ok",
                 is_healthy=None,  # Set later in run_check based on latency threshold
                 ttft_ms=None,
@@ -234,11 +250,7 @@ async def check_model_health(
                 total_ms=total_ms,
             )
         except Exception as fallback_error:
-            return HealthCheckResult(
-                model=name,
-                provider=provider_name,
-                actual_model=actual_model,
-                is_router=is_router,
+            return create_result(
                 status="error",
                 is_healthy=False,
                 ttft_ms=ttft_ms,
@@ -503,7 +515,7 @@ class HealthChecker:
     async def _run_check_once(self) -> list[HealthCheckResult]:
         """Run model and router probes once, returning model results only.
 
-        Router probe status is stored in ``self.last_router_result`` and is not
+        Router probe status is stored in self.last_router_result and is not
         included in the returned list.
         """
         results, results_by_model, new_healthy, router_result = await self._probe_once()
@@ -619,4 +631,3 @@ class HealthChecker:
         if self._task:
             self._task.cancel()
             self._task = None
-
