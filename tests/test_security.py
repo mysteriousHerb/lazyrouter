@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 import lazyrouter.server as server_mod
@@ -122,22 +123,8 @@ def test_chat_completion_no_api_key_config_allows_unauthenticated(monkeypatch):
         )
     assert response.status_code == 200
 
-def test_chat_completion_empty_api_key_config_fails_closed(monkeypatch):
-    setup_mocks(monkeypatch)
-    # Configure the server with EMPTY string API key.
-    # This should be treated as "configured but invalid" (fail closed).
-
-    app = server_mod.create_app(preloaded_config=_config_with_auth(api_key=""))
-
-    with TestClient(app) as client:
-        # Request WITHOUT Authorization header
-        response = client.post(
-            "/v1/chat/completions",
-            json={
-                "model": "m_fast",
-                "messages": [{"role": "user", "content": "hello"}],
-            },
-        )
-
-    # Should be 401 because auth is missing
-    assert response.status_code == 401
+def test_chat_completion_empty_api_key_config_raises_validation_error():
+    # An empty string API key must be rejected at configuration time to prevent
+    # secrets.compare_digest("", "") from accidentally authenticating empty Bearer tokens.
+    with pytest.raises(ValueError, match="must not be an empty string"):
+        _config_with_auth(api_key="")
