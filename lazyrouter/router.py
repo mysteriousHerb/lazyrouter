@@ -9,6 +9,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 import litellm
 
 from .config import Config, ModelConfig
+from .constants import INTERNAL_PARAM_KEYS, ROUTING_PROMPT_TEMPLATE
 from .error_logger import log_provider_error
 from .litellm_utils import build_litellm_params
 from .message_utils import content_to_text, tool_call_name_by_id
@@ -35,35 +36,6 @@ class RoutingResult:
 
 
 logger = logging.getLogger(__name__)
-INTERNAL_PARAM_KEYS = {
-    "tools",
-    "tool_choice",
-    "response_format",
-    "_lazyrouter_input_request",
-}
-
-
-ROUTING_PROMPT_TEMPLATE = """You are a model router. Analyze the user's query and select the most appropriate model.
-
-Each model has an Elo rating from LMSys Chatbot Arena (higher = better quality) for coding and writing, plus pricing per 1M tokens.
-When provided, est_cached_input_price already includes a conservative cache-adjusted input-cost estimate.
-For multi-turn cost comparisons, prioritize est_cached_input_price over raw input_price.
-Prefer cheaper models for simple tasks. Only pick expensive, high-Elo models when the task genuinely needs top-tier quality.
-
-IMPORTANT: If the user explicitly requests a specific model (e.g., "use opus for this", "route to gemini-2.5-pro", "switch to claude-sonnet"), honor that request directly.
-
-Available models:
-{model_descriptions}
-
-Recent conversation context:
-{context}
-
-CURRENT USER REQUEST (most important for routing):
-{current_request}
-
-Choose the model that best matches the CURRENT REQUEST's requirements for quality, speed, and cost-effectiveness. The conversation context is provided for reference, but prioritize the current request.
-
-Respond with brief reasoning (1-2 sentences) first, then your model choice."""
 
 
 class LLMRouter:
