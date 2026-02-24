@@ -1,5 +1,6 @@
 """Shared request/response exchange logger for test proxy and normal server."""
 
+import asyncio
 import json
 import logging
 import os
@@ -74,7 +75,7 @@ def _sanitize_exchange_payload(payload: Any) -> Any:
     return _redact_message_content(sanitized)
 
 
-def log_exchange(
+def _log_exchange_sync(
     label: str,
     request_id: str,
     request_data: Dict[str, Any],
@@ -86,20 +87,7 @@ def log_exchange(
     extra: Optional[Dict[str, Any]] = None,
     request_headers: Optional[Dict[str, str]] = None,
 ) -> None:
-    """Log a request/response exchange to JSONL.
-
-    Args:
-        label: Log file label (e.g. api_style for proxy, 'server' for normal server).
-        request_id: Unique request identifier.
-        request_data: The request payload dict.
-        response_data: The response payload (dict or None).
-        latency_ms: Round-trip latency in milliseconds.
-        is_stream: Whether the request was streamed.
-        request_effective_data: Optional processed request payload (e.g. trimmed/sanitized).
-        error: Optional error string if the request failed.
-        extra: Optional extra fields to include (e.g. routing metadata).
-        request_headers: Optional request headers (sensitive values will be redacted).
-    """
+    """Internal synchronous implementation of log_exchange."""
     entry: Dict[str, Any] = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "request_id": request_id,
@@ -133,3 +121,15 @@ def log_exchange(
         is_stream,
         latency_ms,
     )
+
+
+async def log_exchange(*args, **kwargs) -> None:
+    """Log a request/response exchange to JSONL (async wrapper).
+
+    This function wraps the synchronous file I/O and JSON serialization
+    in a thread to avoid blocking the event loop.
+
+    Args:
+        See _log_exchange_sync for arguments.
+    """
+    await asyncio.to_thread(_log_exchange_sync, *args, **kwargs)

@@ -1,4 +1,5 @@
 import json
+import pytest
 
 from lazyrouter.exchange_logger import configure_log_dir, get_log_path, log_exchange
 
@@ -8,11 +9,12 @@ def _read_jsonl_entries(path):
         return [json.loads(line) for line in f if line.strip()]
 
 
-def test_log_exchange_writes_effective_request_payload(tmp_path):
+@pytest.mark.asyncio
+async def test_log_exchange_writes_effective_request_payload(tmp_path):
     configure_log_dir(str(tmp_path))
     label = "effective_log_test"
 
-    log_exchange(
+    await log_exchange(
         label=label,
         request_id="req-1",
         request_data={
@@ -41,11 +43,12 @@ def test_log_exchange_writes_effective_request_payload(tmp_path):
     assert entry["request_effective"]["message_count_effective"] == 1
 
 
-def test_log_exchange_omits_effective_request_when_not_provided(tmp_path):
+@pytest.mark.asyncio
+async def test_log_exchange_omits_effective_request_when_not_provided(tmp_path):
     configure_log_dir(str(tmp_path))
     label = "effective_log_test_none"
 
-    log_exchange(
+    await log_exchange(
         label=label,
         request_id="req-2",
         request_data={"model": "auto"},
