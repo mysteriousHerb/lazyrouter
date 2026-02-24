@@ -159,10 +159,6 @@ async def check_model_health(
 
     def create_result(
         status: str,
-        ttft_ms: Optional[float],
-        ttft_source: Optional[str],
-        ttft_unavailable_reason: Optional[str],
-        total_ms: Optional[float],
         is_healthy: Optional[bool] = None,
         error: Optional[str] = None,
     ) -> HealthCheckResult:
@@ -212,10 +208,6 @@ async def check_model_health(
         return create_result(
             status="ok",
             is_healthy=None,  # Set later in run_check based on latency threshold
-            ttft_ms=ttft_ms,
-            ttft_source=ttft_source,
-            ttft_unavailable_reason=ttft_unavailable_reason,
-            total_ms=total_ms,
         )
     except Exception as stream_error:
         # Some providers/parsers can fail in stream mode even when non-streaming
@@ -228,6 +220,7 @@ async def check_model_health(
             _compact_error(stream_error),
         )
         # Force TTFT fields to match the non-stream fallback source.
+        # This update is visible to the closure create_result below.
         ttft_ms = None
         ttft_source = "unavailable_non_stream"
         ttft_unavailable_reason = _compact_error(stream_error)
@@ -244,19 +237,11 @@ async def check_model_health(
             return create_result(
                 status="ok",
                 is_healthy=None,  # Set later in run_check based on latency threshold
-                ttft_ms=None,
-                ttft_source=ttft_source,
-                ttft_unavailable_reason=ttft_unavailable_reason,
-                total_ms=total_ms,
             )
         except Exception as fallback_error:
             return create_result(
                 status="error",
                 is_healthy=False,
-                ttft_ms=ttft_ms,
-                ttft_source=ttft_source,
-                ttft_unavailable_reason=ttft_unavailable_reason,
-                total_ms=total_ms,
                 error=(
                     f"stream probe failed: {_compact_error(stream_error)}; "
                     f"non-stream probe failed: {_compact_error(fallback_error)}"
