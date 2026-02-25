@@ -112,10 +112,13 @@ def _log_exchange_sync(
 
     log_path = get_log_path(label)
     try:
+        # Serialize entry to JSON string outside the lock to minimize contention
+        json_line = json.dumps(entry, ensure_ascii=False, default=str) + "\n"
+
         # Acquire lock to prevent interleaved writes from multiple threads
         with _log_lock:
             with open(log_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+                f.write(json_line)
     except OSError as log_error:
         logger.warning("Failed to write exchange log (%s): %s", log_path, log_error)
         return
@@ -158,18 +161,16 @@ async def log_exchange(
         extra: Optional extra fields to include (e.g. routing metadata).
         request_headers: Optional request headers (sensitive values will be redacted).
     """
-    await asyncio.shield(
-        asyncio.to_thread(
-            _log_exchange_sync,
-            label,
-            request_id,
-            request_data,
-            response_data,
-            latency_ms,
-            is_stream,
-            request_effective_data,
-            error,
-            extra,
-            request_headers,
-        )
+    await asyncio.to_thread(
+        _log_exchange_sync,
+        label,
+        request_id,
+        request_data,
+        response_data,
+        latency_ms,
+        is_stream,
+        request_effective_data,
+        error,
+        extra,
+        request_headers,
     )
