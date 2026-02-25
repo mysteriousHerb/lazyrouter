@@ -208,3 +208,44 @@ def test_gemini_message_sanitizer_drops_invalid_list_parts():
 
     assert out[0]["role"] == "user"
     assert out[0]["content"] == [{"type": "text", "text": "hello"}]
+
+
+def test_gemini_message_sanitizer_keeps_valid_image_parts():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "describe"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://example.com/cat.png"},
+                },
+            ],
+        }
+    ]
+
+    out = sanitize_messages_for_gemini(messages)
+
+    assert out[0]["role"] == "user"
+    assert out[0]["content"] == [
+        {"type": "text", "text": "describe"},
+        {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+    ]
+
+
+def test_gemini_message_sanitizer_normalizes_string_image_url_part():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": "https://example.com/dog.png"},
+            ],
+        }
+    ]
+
+    out = sanitize_messages_for_gemini(messages)
+
+    assert out[0]["role"] == "user"
+    assert out[0]["content"] == [
+        {"type": "image_url", "image_url": {"url": "https://example.com/dog.png"}}
+    ]
