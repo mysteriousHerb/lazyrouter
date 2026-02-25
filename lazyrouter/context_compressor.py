@@ -6,11 +6,14 @@ This module intentionally avoids LLM-dependent compression. It only provides:
 """
 
 import copy
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from .message_utils import content_to_text
 from .usage_logger import estimate_messages_tokens, estimate_tokens
+
+logger = logging.getLogger(__name__)
 
 INSTRUCTION_ROLES = {"system", "developer"}
 DEFAULT_HISTORY_BUDGET = 16000
@@ -18,6 +21,7 @@ DEFAULT_HISTORY_BUDGET = 16000
 # large user hard-caps do not collapse/disable progressive trimming behavior.
 MIN_HISTORY_BUDGET = 2000
 MAX_HISTORY_BUDGET = 32000
+DEFAULT_CONVERSATION_OVERHEAD = 3
 
 # Heuristic ratios for deriving progressive caps from budget + message density.
 # Tuned to keep near-old messages reasonably informative while compressing
@@ -338,20 +342,50 @@ def compress_messages(
         [m for m in compressed if m is not None], model=model
     )
 
+    # Determine conversation overhead once to allow efficient incremental updates
+    # to total_tokens when dropping messages, instead of O(N) re-estimation.
+    try:
+        dummy_message = {"role": "user", "content": "a"}
+        tokens_one = _estimate_messages_tokens([dummy_message], model=model)
+        tokens_two = _estimate_messages_tokens([dummy_message, dummy_message], model=model)
+        conversation_overhead = max(0, 2 * tokens_one - tokens_two)
+    except Exception as e:
+        # Catch-all to ensure compression never fails due to tokenizer errors.
+        logger.warning(
+            "Failed to calculate dynamic conversation overhead, defaulting to %s: %s",
+            DEFAULT_CONVERSATION_OVERHEAD,
+            e,
+        )
+        conversation_overhead = DEFAULT_CONVERSATION_OVERHEAD
+
+    remaining_count = sum(1 for m in compressed if m is not None)
+
     for strict_phase in (True, False):
         for unit in _drop_candidates(preferred_unprotected_only=strict_phase):
             if total_tokens <= config.max_history_tokens:
                 break
+
+            unit_messages = []
             dropped_count = 0
             for idx in unit:
                 if compressed[idx] is None:
                     continue
+                unit_messages.append(compressed[idx])
                 compressed[idx] = None
                 dropped_count += 1
+
+            if dropped_count == 0:
+                continue
+
             stats.messages_dropped += dropped_count
-            total_tokens = _estimate_messages_tokens(
-                [m for m in compressed if m is not None], model=model
-            )
+            remaining_count -= dropped_count
+
+            if remaining_count <= 0:
+                total_tokens = 0
+            else:
+                unit_tokens = _estimate_messages_tokens(unit_messages, model=model)
+                total_tokens = max(0, total_tokens - unit_tokens + conversation_overhead)
+
         if total_tokens <= config.max_history_tokens:
             break
 
