@@ -82,6 +82,7 @@ def _filter_tools_for_model(
     model_name: str,
     model_config: Optional["ModelConfig"],
     cfg: "Config",
+    predicted_tool_names: Optional[set[str]] = None,
 ) -> List[Any]:
     """Apply configured tool filtering for non-cacheable models."""
     filter_cfg = getattr(cfg, "tool_filtering", None)
@@ -105,6 +106,10 @@ def _filter_tools_for_model(
         for name in getattr(filter_cfg, "always_included", [])
         if str(name).strip()
     }
+    if getattr(filter_cfg, "use_router_prediction", False) and predicted_tool_names:
+        allowed_names.update(
+            {name.strip() for name in predicted_tool_names if name.strip()}
+        )
     if not allowed_names:
         return tools
 
@@ -118,6 +123,17 @@ def _filter_tools_for_model(
             len(tools),
         )
         return tools
+
+    relaxed_min_tools = int(getattr(filter_cfg, "prediction_relaxed_min_tools", 0) or 0)
+    if relaxed_min_tools > 0 and len(filtered_tools) < relaxed_min_tools:
+        existing_ids = {id(tool) for tool in filtered_tools}
+        for tool in tools:
+            if id(tool) in existing_ids:
+                continue
+            filtered_tools.append(tool)
+            existing_ids.add(id(tool))
+            if len(filtered_tools) >= relaxed_min_tools:
+                break
 
     logger.info(
         "[tool-filter] model=%s filtered tools %d -> %d",
@@ -154,6 +170,8 @@ class RequestContext:
     routing_response: Optional[str] = None
     routing_reasoning: Optional[str] = None
     router_skipped_reason: Optional[str] = None
+    predicted_tool_names: set[str] = dataclasses.field(default_factory=set)
+    tool_prediction_reasoning: Optional[str] = None
 
     # Step 3: context compression
     compression_stats: Optional[Dict[str, Any]] = None
@@ -176,6 +194,7 @@ def _prepare_for_model(
     messages: list,
     request: "ChatCompletionRequest",
     cfg: "Config",
+    predicted_tool_names: Optional[set[str]] = None,
 ) -> tuple:
     """Pure function: returns (provider_messages, extra_kwargs, api_style) for a model,
     or (None, None, None) if the model is not found in config."""
@@ -190,7 +209,13 @@ def _prepare_for_model(
         prep_messages = sanitize_messages_for_gemini(messages)
 
     if request.tools:
-        tools = _filter_tools_for_model(request.tools, model_name, mc, cfg)
+        tools = _filter_tools_for_model(
+            request.tools,
+            model_name,
+            mc,
+            cfg,
+            predicted_tool_names=predicted_tool_names,
+        )
         if api_style == "anthropic":
             prep_extra["tools"] = sanitize_tool_schema_for_anthropic(tools)
         elif api_style == "gemini":
@@ -482,6 +507,60 @@ async def _handle_cache_aware_routing(
     return cached_model
 
 
+async def _predict_tools_for_request(ctx: RequestContext, router: Any) -> None:
+    """Populate predicted tool names for non-cacheable models when enabled."""
+    tools = ctx.request.tools
+    if not tools:
+        return
+
+    filter_cfg = getattr(ctx.config, "tool_filtering", None)
+    if not filter_cfg or not getattr(filter_cfg, "enabled", False):
+        return
+    if not getattr(filter_cfg, "use_router_prediction", False):
+        return
+
+    model_config = ctx.model_config
+    if (
+        getattr(filter_cfg, "disable_for_cacheable_models", True)
+        and model_config
+        and model_config.cache_ttl
+    ):
+        return
+
+    predict_tools_fn = getattr(router, "predict_tools", None)
+    if not callable(predict_tools_fn):
+        logger.warning("[tool-filter] router has no predict_tools() method; skipping")
+        return
+
+    try:
+        prediction = await predict_tools_fn(
+            ctx.messages,
+            tools,
+            max_tools=getattr(filter_cfg, "prediction_max_tools", None),
+        )
+    except Exception as err:
+        logger.warning("[tool-filter] tool prediction failed: %s", err)
+        return
+
+    predicted_names = {
+        str(name).strip()
+        for name in getattr(prediction, "tool_names", [])
+        if str(name).strip()
+    }
+    if not predicted_names:
+        return
+
+    ctx.predicted_tool_names = predicted_names
+    reasoning = getattr(prediction, "reasoning", None)
+    if isinstance(reasoning, str):
+        ctx.tool_prediction_reasoning = reasoning
+    logger.info(
+        "[tool-filter] predicted %d tool(s) for model=%s",
+        len(predicted_names),
+        ctx.selected_model,
+    )
+
+
 def _update_cache_tracker_for_selection(ctx: RequestContext) -> None:
     """Update or clear cache tracking after a model is selected."""
     model_config = ctx.model_config
@@ -579,6 +658,7 @@ async def select_model(ctx: RequestContext, health_checker: Any, router: Any) ->
     ctx.selected_model = selected_model
     ctx.model_config = model_config
 
+    await _predict_tools_for_request(ctx, router)
     _update_cache_tracker_for_selection(ctx)
 
 
@@ -627,7 +707,11 @@ def compress_context(ctx: RequestContext) -> None:
 def prepare_provider(ctx: RequestContext) -> None:
     """Populate ctx.provider_messages, extra_kwargs, provider_api_style, provider_kwargs, effective_max_tokens."""
     provider_messages, extra_kwargs, api_style = _prepare_for_model(
-        ctx.selected_model, ctx.messages, ctx.request, ctx.config
+        ctx.selected_model,
+        ctx.messages,
+        ctx.request,
+        ctx.config,
+        predicted_tool_names=ctx.predicted_tool_names,
     )
     ctx.provider_messages = provider_messages
     ctx.extra_kwargs = extra_kwargs
@@ -704,7 +788,11 @@ async def _backoff_retry_loop(
             if not mc:
                 continue
             prep_messages, prep_extra, api_style = _prepare_for_model(
-                try_model, ctx.messages, ctx.request, ctx.config
+                try_model,
+                ctx.messages,
+                ctx.request,
+                ctx.config,
+                predicted_tool_names=ctx.predicted_tool_names,
             )
             if prep_messages is None:
                 continue
@@ -758,7 +846,11 @@ async def call_with_fallback(
         if not mc:
             continue
         prep_messages, prep_extra, api_style = _prepare_for_model(
-            try_model, ctx.messages, ctx.request, ctx.config
+            try_model,
+            ctx.messages,
+            ctx.request,
+            ctx.config,
+            predicted_tool_names=ctx.predicted_tool_names,
         )
         if prep_messages is None:
             continue

@@ -468,6 +468,12 @@ def create_app(
             parts = [f"model={ctx.selected_model}"]
             if request.tools:
                 parts.append(f"tools: {len(request.tools)}")
+            if ctx.predicted_tool_names:
+                parts.append(f"predicted_tools: {len(ctx.predicted_tool_names)}")
+            if ctx.tool_prediction_reasoning:
+                preview = ctx.tool_prediction_reasoning[:80]
+                suffix = "..." if len(ctx.tool_prediction_reasoning) > 80 else ""
+                parts.append(f"tool_why: {preview}{suffix}")
             if ctx.compression_stats and ctx.compression_stats["savings_pct"] > 0:
                 parts.append(
                     f"history: {ctx.compression_stats['original_tokens']}->{ctx.compression_stats['compressed_tokens']} ({ctx.compression_stats['savings_pct']}%)"

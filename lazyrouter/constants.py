@@ -59,5 +59,30 @@ Choose the model that best matches the CURRENT REQUEST's requirements for qualit
 
 Respond with brief reasoning (1-2 sentences) first, then your model choice."""
 
+# Default tool-prediction prompt template (router.py)
+TOOL_PREDICTION_PROMPT_TEMPLATE = """You are a tool planner for an LLM coding assistant.
+
+Your job is to select tools that may be needed for both:
+1) immediate steps, and
+2) likely consequence/follow-up steps in this turn.
+
+Be moderately permissive. Include plausibly useful tools beyond only the first step,
+but do not return all tools unless the request is truly broad.
+
+Available tools:
+{tool_descriptions}
+
+Recent conversation context:
+{context}
+
+Current user request:
+{current_request}
+
+Return JSON with:
+- reasoning: short explanation
+- tools: array of tool names
+
+Only use tool names from the available tools list."""
+
 # Cache tracker constants (cache_tracker.py)
 CACHE_TIMESTAMPS_MAX = 4096

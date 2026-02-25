@@ -449,9 +449,22 @@ class _FakeRoutingResult:
 class _FakeRouter:
     def __init__(self, returns_model):
         self._model = returns_model
+        self.predicted_tools = []
+        self.prediction_reasoning = None
 
     async def route(self, messages, exclude_models=None):
         return _FakeRoutingResult(self._model)
+
+    async def predict_tools(self, messages, tools, max_tools=None):
+        class _Prediction:
+            def __init__(self, tool_names, reasoning):
+                self.tool_names = tool_names
+                self.reasoning = reasoning
+
+        tool_names = self.predicted_tools
+        if max_tools is not None:
+            tool_names = tool_names[:max_tools]
+        return _Prediction(tool_names, self.prediction_reasoning)
 
 
 def test_select_model_auto_uses_router():
@@ -753,3 +766,146 @@ def test_select_model_skips_router_on_tool_continuation():
     assert ctx.selected_model == "m2"
     assert ctx.router_skipped_reason is not None
     assert "cached" in ctx.router_skipped_reason
+
+
+def test_select_model_populates_predicted_tools_for_non_cacheable_model():
+    cfg = Config(
+        serve=ServeConfig(),
+        router=RouterConfig(provider="p1", model="m1"),
+        providers={"p1": ProviderConfig(api_key="k", api_style="openai")},
+        llms={"m1": ModelConfig(provider="p1", model="gpt-test", description="openai")},
+        tool_filtering=ToolFilteringConfig(
+            enabled=True,
+            disable_for_cacheable_models=True,
+            use_router_prediction=True,
+            prediction_max_tools=3,
+        ),
+        health_check=HealthCheckConfig(enabled=False, interval=300),
+    )
+    req = _request(
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "read",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "write",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+        ]
+    )
+    ctx = _ctx(request=req, config=cfg)
+    normalize_messages(ctx)
+
+    hc = _FakeHealthChecker(healthy={"m1"})
+    router = _FakeRouter(returns_model="m1")
+    router.predicted_tools = ["read", "write"]
+    router.prediction_reasoning = "Need file IO"
+
+    asyncio.run(select_model(ctx, hc, router))
+
+    assert ctx.predicted_tool_names == {"read", "write"}
+    assert ctx.tool_prediction_reasoning == "Need file IO"
+
+
+def test_prepare_provider_filters_using_router_predicted_tools():
+    cfg = Config(
+        serve=ServeConfig(),
+        router=RouterConfig(provider="p1", model="m1"),
+        providers={"p1": ProviderConfig(api_key="k", api_style="openai")},
+        llms={"m1": ModelConfig(provider="p1", model="gpt-test", description="openai")},
+        tool_filtering=ToolFilteringConfig(
+            enabled=True,
+            disable_for_cacheable_models=True,
+            always_included=[],
+            use_router_prediction=True,
+            prediction_relaxed_min_tools=0,
+        ),
+        health_check=HealthCheckConfig(enabled=False),
+    )
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "write",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+    ]
+    req = _request(tools=tools)
+    ctx = _ctx(request=req, config=cfg)
+    ctx.messages = [{"role": "user", "content": "hi"}]
+    ctx.selected_model = "m1"
+    ctx.model_config = cfg.llms["m1"]
+    ctx.predicted_tool_names = {"write"}
+
+    prepare_provider(ctx)
+
+    result_tools = ctx.extra_kwargs["tools"]
+    assert len(result_tools) == 1
+    assert result_tools[0]["function"]["name"] == "write"
+
+
+def test_prepare_provider_relaxed_minimum_adds_extra_tools():
+    cfg = Config(
+        serve=ServeConfig(),
+        router=RouterConfig(provider="p1", model="m1"),
+        providers={"p1": ProviderConfig(api_key="k", api_style="openai")},
+        llms={"m1": ModelConfig(provider="p1", model="gpt-test", description="openai")},
+        tool_filtering=ToolFilteringConfig(
+            enabled=True,
+            disable_for_cacheable_models=True,
+            always_included=[],
+            use_router_prediction=True,
+            prediction_relaxed_min_tools=2,
+        ),
+        health_check=HealthCheckConfig(enabled=False),
+    )
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "write",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "grep",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+    ]
+    req = _request(tools=tools)
+    ctx = _ctx(request=req, config=cfg)
+    ctx.messages = [{"role": "user", "content": "hi"}]
+    ctx.selected_model = "m1"
+    ctx.model_config = cfg.llms["m1"]
+    ctx.predicted_tool_names = {"read"}
+
+    prepare_provider(ctx)
+
+    result_tools = ctx.extra_kwargs["tools"]
+    assert len(result_tools) == 2
+    assert result_tools[0]["function"]["name"] == "read"

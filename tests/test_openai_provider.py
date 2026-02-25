@@ -35,11 +35,21 @@ class _FakeStream:
             raise StopAsyncIteration from exc
 
 
-def _config() -> Config:
+def _config(with_fallback: bool = False) -> Config:
+    providers = {"p1": ProviderConfig(api_key="test-key", api_style="openai")}
+    router_cfg = RouterConfig(provider="p1", model="router-model")
+    if with_fallback:
+        providers["p2"] = ProviderConfig(api_key="test-key-2", api_style="openai")
+        router_cfg = RouterConfig(
+            provider="p1",
+            model="router-model",
+            provider_fallback="p2",
+            model_fallback="router-model-fallback",
+        )
     return Config(
         serve=ServeConfig(),
-        router=RouterConfig(provider="p1", model="router-model"),
-        providers={"p1": ProviderConfig(api_key="test-key", api_style="openai")},
+        router=router_cfg,
+        providers=providers,
         llms={"m1": ModelConfig(provider="p1", model="gpt-test", description="test")},
         health_check=HealthCheckConfig(enabled=False),
     )
@@ -179,3 +189,83 @@ def test_router_chat_completion_retries_without_max_tokens_after_stream_options_
     assert "max_tokens" not in calls[2]
     assert chunks[0].startswith("data: ")
     assert chunks[-1] == "data: [DONE]\n\n"
+
+
+def test_router_predict_tools_parses_response(monkeypatch):
+    async def _fake_acompletion(**kwargs):
+        return _FakeResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"reasoning":"Need read+grep","tools":["read","grep","read","missing"]}'
+                            )
+                        }
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr(router_mod.litellm, "acompletion", _fake_acompletion)
+    router = LLMRouter(_config())
+
+    result = asyncio.run(
+        router.predict_tools(
+            messages=[{"role": "user", "content": "Find TODOs in file and inspect."}],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {"name": "read", "description": "Read files"},
+                },
+                {
+                    "type": "function",
+                    "function": {"name": "grep", "description": "Search content"},
+                },
+                {
+                    "type": "function",
+                    "function": {"name": "write", "description": "Write files"},
+                },
+            ],
+            max_tools=2,
+        )
+    )
+
+    assert result.tool_names == ["read", "grep"]
+    assert result.reasoning == "Need read+grep"
+
+
+def test_router_predict_tools_uses_fallback_backend(monkeypatch):
+    calls = []
+
+    async def _fake_acompletion(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise Exception("primary failed")
+        return _FakeResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"reasoning":"Need edit","tools":["edit"]}'
+                        }
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr(router_mod.litellm, "acompletion", _fake_acompletion)
+    router = LLMRouter(_config(with_fallback=True))
+
+    result = asyncio.run(
+        router.predict_tools(
+            messages=[{"role": "user", "content": "Edit this file"}],
+            tools=[
+                {"type": "function", "function": {"name": "edit"}},
+                {"type": "function", "function": {"name": "read"}},
+            ],
+        )
+    )
+
+    assert result.tool_names == ["edit"]
+    assert len(calls) == 2
