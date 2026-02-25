@@ -57,7 +57,7 @@ def verify_api_key(
 ) -> None:
     """Verify API key from Bearer token."""
     # If no API key is configured (None), allow all requests.
-    # Empty string is treated as configured but invalid (fail closed).
+    # Empty string API keys are rejected at config load time by ServeConfig validation.
     if config is None or config.serve.api_key is None:
         return
 
