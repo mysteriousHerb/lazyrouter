@@ -96,7 +96,7 @@ def _sanitize_gemini_content_list(content: List[Any]) -> List[Any] | str:
 
         # Keep any textual block by normalizing to the canonical OpenAI text part.
         text_value = item.get("text")
-        if isinstance(text_value, str):
+        if isinstance(text_value, str) and text_value.strip():
             normalized.append({"type": "text", "text": text_value})
             continue
 
@@ -158,17 +158,23 @@ def sanitize_messages_for_gemini(
 
         msg = copy.deepcopy(original)
         role = str(msg.get("role", "")).strip().lower()
+        has_tool_calls = isinstance(msg.get("tool_calls"), list) and bool(
+            msg.get("tool_calls")
+        )
 
         for key in GEMINI_MESSAGE_DROP_FIELDS:
             msg.pop(key, None)
 
         content = msg.get("content")
         if content is None:
-            msg["content"] = ""
+            msg["content"] = None if (role == "assistant" and has_tool_calls) else " "
         elif isinstance(content, list):
             msg["content"] = _sanitize_gemini_content_list(content)
         elif isinstance(content, dict):
             msg["content"] = content_to_text(content)
+
+        if isinstance(msg.get("content"), str) and not msg["content"].strip():
+            msg["content"] = None if (role == "assistant" and has_tool_calls) else " "
 
         if role == "assistant":
             tool_calls = msg.get("tool_calls")
@@ -179,7 +185,11 @@ def sanitize_messages_for_gemini(
                     if isinstance(tc, dict)
                 ]
             if isinstance(msg.get("content"), list):
-                msg["content"] = content_to_text(msg.get("content"))
+                flattened = content_to_text(msg.get("content"))
+                if flattened.strip():
+                    msg["content"] = flattened
+                else:
+                    msg["content"] = None if has_tool_calls else " "
 
         elif role == "tool":
             # Some Gemini-compatible upstreams reject `tool` role and only accept
