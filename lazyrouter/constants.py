@@ -91,7 +91,9 @@ Select the best model, then choose a practical tool set for this request.
 Tool selection should cover:
 1) immediate steps, and
 2) likely consequence/follow-up steps in this turn.
+Assume tool calls can be chained; include tools needed after early tool outputs.
 
+Think through the likely execution path privately before choosing tools.
 Be moderately permissive, not overly strict.
 Pick at least {min_tools} and at most {max_tools} tools.
 
@@ -108,7 +110,7 @@ Current user request:
 {current_request}
 
 Return JSON with:
-- reasoning: short explanation
+- reasoning: short explanation (brief summary only)
 - model: selected model name
 - tools: array of selected tool names
 

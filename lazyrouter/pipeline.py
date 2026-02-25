@@ -77,6 +77,16 @@ def _extract_tool_name(tool: Any) -> Optional[str]:
     return None
 
 
+def _format_tool_names_for_log(names: List[str], max_items: int = 20) -> str:
+    """Format tool names for concise info-level logging."""
+    if not names:
+        return "[]"
+    shown = names[:max_items]
+    if len(names) <= max_items:
+        return "[" + ", ".join(shown) + "]"
+    return "[" + ", ".join(shown) + f", ... (+{len(names) - max_items} more)]"
+
+
 def _filter_tools_for_model(
     tools: List[Any],
     model_name: str,
@@ -125,10 +135,13 @@ def _filter_tools_for_model(
         return tools
 
     logger.info(
-        "[tool-filter] model=%s filtered tools %d -> %d",
+        "[tool-filter] model=%s filtered tools %d -> %d | kept=%s",
         model_name,
         len(tools),
         len(filtered_tools),
+        _format_tool_names_for_log(
+            [name for name in (_extract_tool_name(tool) for tool in filtered_tools) if name]
+        ),
     )
     return filtered_tools
 
