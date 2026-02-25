@@ -12,12 +12,13 @@ import threading
 import time
 from typing import Dict, Optional, Tuple
 
+from .constants import CACHE_TIMESTAMPS_MAX
+
 logger = logging.getLogger(__name__)
 
 # session_key -> (model_name, cache_creation_timestamp)
 _cache_timestamps: Dict[str, Tuple[str, float]] = {}
 _cache_timestamps_lock = threading.Lock()
-_cache_timestamps_max = 4096
 _warned_process_local = False
 
 
@@ -59,7 +60,7 @@ def cache_tracker_set(session_key: str, model_name: str) -> None:
     _warn_if_multi_process()
     with _cache_timestamps_lock:
         _cache_timestamps[session_key] = (model_name, time.monotonic())
-        while len(_cache_timestamps) > _cache_timestamps_max:
+        while len(_cache_timestamps) > CACHE_TIMESTAMPS_MAX:
             _cache_timestamps.pop(next(iter(_cache_timestamps)))
     logger.debug(
         "[cache-tracker] set session=%s model=%s",

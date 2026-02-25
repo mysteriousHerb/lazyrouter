@@ -9,6 +9,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 import litellm
 
 from .config import Config, ModelConfig
+from .constants import INTERNAL_PARAM_KEYS, ROUTING_PROMPT_TEMPLATE
 from .error_logger import log_provider_error
 from .litellm_utils import build_litellm_params
 from .message_utils import content_to_text, tool_call_name_by_id
@@ -35,35 +36,6 @@ class RoutingResult:
 
 
 logger = logging.getLogger(__name__)
-INTERNAL_PARAM_KEYS = {
-    "tools",
-    "tool_choice",
-    "response_format",
-    "_lazyrouter_input_request",
-}
-
-
-ROUTING_PROMPT_TEMPLATE = """You are a model router. Analyze the user's query and select the most appropriate model.
-
-Each model has an Elo rating from LMSys Chatbot Arena (higher = better quality) for coding and writing, plus pricing per 1M tokens.
-When provided, est_cached_input_price already includes a conservative cache-adjusted input-cost estimate.
-For multi-turn cost comparisons, prioritize est_cached_input_price over raw input_price.
-Prefer cheaper models for simple tasks. Only pick expensive, high-Elo models when the task genuinely needs top-tier quality.
-
-IMPORTANT: If the user explicitly requests a specific model (e.g., "use opus for this", "route to gemini-2.5-pro", "switch to claude-sonnet"), honor that request directly.
-
-Available models:
-{model_descriptions}
-
-Recent conversation context:
-{context}
-
-CURRENT USER REQUEST (most important for routing):
-{current_request}
-
-Choose the model that best matches the CURRENT REQUEST's requirements for quality, speed, and cost-effectiveness. The conversation context is provided for reference, but prioritize the current request.
-
-Respond with brief reasoning (1-2 sentences) first, then your model choice."""
 
 
 class LLMRouter:
@@ -86,6 +58,7 @@ class LLMRouter:
 
         # Initialize routing logger
         self.routing_logger = RoutingLogger()
+        self._cached_full_descriptions = None
 
     def _get_litellm_params(self, provider_name: str, model: str) -> dict:
         """Build LiteLLM parameters for a provider"""
@@ -150,6 +123,8 @@ class LLMRouter:
 
     def _build_model_descriptions(self, exclude_models: Optional[set] = None) -> str:
         """Build formatted string of model descriptions for routing prompt"""
+        if not exclude_models and self._cached_full_descriptions:
+            return self._cached_full_descriptions
         descriptions = []
         for model_name, model_config in self.config.llms.items():
             if exclude_models and model_name in exclude_models:
@@ -177,7 +152,10 @@ class LLMRouter:
             if meta:
                 parts.append(f"  [{', '.join(meta)}]")
             descriptions.append("".join(parts))
-        return "\n".join(descriptions)
+        result = "\n".join(descriptions)
+        if not exclude_models:
+            self._cached_full_descriptions = result
+        return result
 
     @staticmethod
     def _summarize_tool_calls_for_router(

@@ -29,10 +29,15 @@ from .message_utils import (
     content_to_text,
     tool_call_name_by_id,
 )
+from .constants import (
+    ANTHROPIC_DUMMY_USER_MESSAGE,
+    INITIAL_RETRY_DELAY,
+    MESSAGE_ID_RE,
+    PASSTHROUGH_EXCLUDE,
+    RETRY_MULTIPLIER,
+)
 from .model_normalization import normalize_requested_model
 from .retry_handler import (
-    INITIAL_RETRY_DELAY,
-    RETRY_MULTIPLIER,
     is_retryable_error,
     select_fallback_models,
 )
@@ -52,24 +57,6 @@ if TYPE_CHECKING:
     from .models import ChatCompletionRequest
 
 logger = logging.getLogger(__name__)
-_ANTHROPIC_DUMMY_USER_MESSAGE = {"role": "user", "content": "Please continue."}
-_MESSAGE_ID_RE = re.compile(r'("message_id"\s*:\s*)"[^"]*"')
-
-_PASSTHROUGH_EXCLUDE = {
-    "model",
-    "messages",
-    "temperature",
-    "max_tokens",
-    "max_completion_tokens",
-    "stream",
-    "top_p",
-    "n",
-    "stop",
-    "tools",
-    "tool_choice",
-    "stream_options",
-    "store",
-}
 
 
 def _extract_tool_name(tool: Any) -> Optional[str]:
@@ -221,7 +208,7 @@ def _prepare_for_model(
             if msg.get("role") == "system":
                 content = msg.get("content", "")
                 if isinstance(content, str) and content:
-                    stabilised = _MESSAGE_ID_RE.sub(r'\1"0"', content)
+                    stabilised = MESSAGE_ID_RE.sub(r'\1"0"', content)
                     if stabilised != content:
                         msg = dict(msg)
                         msg["content"] = stabilised
@@ -233,7 +220,7 @@ def _prepare_for_model(
             for msg in prep_messages
         )
         if not has_non_system:
-            prep_messages = [*prep_messages, dict(_ANTHROPIC_DUMMY_USER_MESSAGE)]
+            prep_messages = [*prep_messages, dict(ANTHROPIC_DUMMY_USER_MESSAGE)]
 
     if request.tool_choice is not None:
         prep_extra["tool_choice"] = request.tool_choice
@@ -662,7 +649,7 @@ def prepare_provider(ctx: RequestContext) -> None:
         provider_kwargs["stream_options"] = req.stream_options
 
     for key, value in (req.model_extra or {}).items():
-        if key not in _PASSTHROUGH_EXCLUDE and value is not None:
+        if key not in PASSTHROUGH_EXCLUDE and value is not None:
             provider_kwargs[key] = value
 
     ctx.provider_kwargs = provider_kwargs
