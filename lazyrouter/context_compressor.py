@@ -342,14 +342,15 @@ def compress_messages(
         [m for m in compressed if m is not None], model=model
     )
 
-    # Determine conversation overhead once to allow efficient O(1) updates
+    # Determine conversation overhead once to allow efficient incremental updates
     # to total_tokens when dropping messages, instead of O(N) re-estimation.
     try:
-        _dummy = {"role": "user", "content": "a"}
-        _t1 = _estimate_messages_tokens([_dummy], model=model)
-        _t2 = _estimate_messages_tokens([_dummy, _dummy], model=model)
-        conversation_overhead = max(0, 2 * _t1 - _t2)
+        dummy_message = {"role": "user", "content": "a"}
+        tokens_one = _estimate_messages_tokens([dummy_message], model=model)
+        tokens_two = _estimate_messages_tokens([dummy_message, dummy_message], model=model)
+        conversation_overhead = max(0, 2 * tokens_one - tokens_two)
     except Exception as e:
+        # Catch-all to ensure compression never fails due to tokenizer errors.
         logger.warning(
             "Failed to calculate dynamic conversation overhead, defaulting to %s: %s",
             DEFAULT_CONVERSATION_OVERHEAD,
@@ -357,7 +358,7 @@ def compress_messages(
         )
         conversation_overhead = DEFAULT_CONVERSATION_OVERHEAD
 
-    remaining_count = len([m for m in compressed if m is not None])
+    remaining_count = sum(1 for m in compressed if m is not None)
 
     for strict_phase in (True, False):
         for unit in _drop_candidates(preferred_unprotected_only=strict_phase):
