@@ -124,17 +124,6 @@ def _filter_tools_for_model(
         )
         return tools
 
-    relaxed_min_tools = int(getattr(filter_cfg, "prediction_relaxed_min_tools", 0) or 0)
-    if relaxed_min_tools > 0 and len(filtered_tools) < relaxed_min_tools:
-        existing_ids = {id(tool) for tool in filtered_tools}
-        for tool in tools:
-            if id(tool) in existing_ids:
-                continue
-            filtered_tools.append(tool)
-            existing_ids.add(id(tool))
-            if len(filtered_tools) >= relaxed_min_tools:
-                break
-
     logger.info(
         "[tool-filter] model=%s filtered tools %d -> %d",
         model_name,
@@ -470,10 +459,13 @@ async def _handle_cache_aware_routing(
         )
         return cached_model
 
+    route_kwargs = _route_kwargs_for_tool_prediction(ctx)
     routing_result = await router.route(
         ctx.messages,
         exclude_models=health_checker.unhealthy_models or None,
+        **route_kwargs,
     )
+    _apply_route_tool_prediction(ctx, routing_result)
     routed_model = routing_result.model
     routed_config = ctx.config.llms.get(routed_model)
     if routed_config is None:
@@ -507,58 +499,52 @@ async def _handle_cache_aware_routing(
     return cached_model
 
 
-async def _predict_tools_for_request(ctx: RequestContext, router: Any) -> None:
-    """Populate predicted tool names for non-cacheable models when enabled."""
+def _should_use_router_tool_prediction(ctx: RequestContext) -> bool:
+    """Return True when routing should co-select tools in the same router call."""
     tools = ctx.request.tools
     if not tools:
-        return
+        return False
+    if ctx.is_tool_continuation_turn:
+        return False
 
     filter_cfg = getattr(ctx.config, "tool_filtering", None)
     if not filter_cfg or not getattr(filter_cfg, "enabled", False):
-        return
+        return False
     if not getattr(filter_cfg, "use_router_prediction", False):
-        return
+        return False
+    return True
 
-    model_config = ctx.model_config
-    if (
-        getattr(filter_cfg, "disable_for_cacheable_models", True)
-        and model_config
-        and model_config.cache_ttl
-    ):
-        return
 
-    predict_tools_fn = getattr(router, "predict_tools", None)
-    if not callable(predict_tools_fn):
-        logger.warning("[tool-filter] router has no predict_tools() method; skipping")
-        return
+def _route_kwargs_for_tool_prediction(ctx: RequestContext) -> Dict[str, Any]:
+    """Build route() kwargs for combined model+tool selection."""
+    if not _should_use_router_tool_prediction(ctx):
+        return {}
 
-    try:
-        prediction = await predict_tools_fn(
-            ctx.messages,
-            tools,
-            max_tools=getattr(filter_cfg, "prediction_max_tools", None),
-        )
-    except Exception as err:
-        logger.warning("[tool-filter] tool prediction failed: %s", err)
-        return
+    filter_cfg = getattr(ctx.config, "tool_filtering", None)
+    return {
+        "tools": ctx.request.tools,
+        "prediction_min_tools": getattr(filter_cfg, "prediction_relaxed_min_tools", 0),
+        "prediction_max_tools": getattr(filter_cfg, "prediction_max_tools", None),
+    }
 
+
+def _apply_route_tool_prediction(ctx: RequestContext, routing_result: Any) -> None:
+    """Copy predicted tool metadata from routing result into request context."""
     predicted_names = {
         str(name).strip()
-        for name in getattr(prediction, "tool_names", [])
+        for name in getattr(routing_result, "predicted_tools", [])
         if str(name).strip()
     }
-    if not predicted_names:
-        return
-
-    ctx.predicted_tool_names = predicted_names
-    reasoning = getattr(prediction, "reasoning", None)
+    if predicted_names:
+        ctx.predicted_tool_names = predicted_names
+        logger.info(
+            "[tool-filter] predicted %d tool(s) for model=%s",
+            len(predicted_names),
+            routing_result.model,
+        )
+    reasoning = getattr(routing_result, "reasoning", None)
     if isinstance(reasoning, str):
         ctx.tool_prediction_reasoning = reasoning
-    logger.info(
-        "[tool-filter] predicted %d tool(s) for model=%s",
-        len(predicted_names),
-        ctx.selected_model,
-    )
 
 
 def _update_cache_tracker_for_selection(ctx: RequestContext) -> None:
@@ -637,14 +623,17 @@ async def select_model(ctx: RequestContext, health_checker: Any, router: Any) ->
             )
 
         if selected_model is None:
+            route_kwargs = _route_kwargs_for_tool_prediction(ctx)
             routing_result = await router.route(
                 ctx.messages,
                 exclude_models=health_checker.unhealthy_models or None,
+                **route_kwargs,
             )
             selected_model = routing_result.model
             ctx.routing_result = routing_result
             ctx.routing_response = routing_result.raw_response
             ctx.routing_reasoning = routing_result.reasoning
+            _apply_route_tool_prediction(ctx, routing_result)
     else:
         selected_model = ctx.resolved_model
         logger.info("Using specified model: %s", selected_model)
@@ -658,7 +647,19 @@ async def select_model(ctx: RequestContext, health_checker: Any, router: Any) ->
     ctx.selected_model = selected_model
     ctx.model_config = model_config
 
-    await _predict_tools_for_request(ctx, router)
+    filter_cfg = getattr(ctx.config, "tool_filtering", None)
+    if (
+        ctx.predicted_tool_names
+        and filter_cfg
+        and getattr(filter_cfg, "disable_for_cacheable_models", True)
+        and model_config.cache_ttl
+    ):
+        logger.debug(
+            "[tool-filter] clearing predicted tools for cacheable model=%s",
+            selected_model,
+        )
+        ctx.predicted_tool_names.clear()
+
     _update_cache_tracker_for_selection(ctx)
 
 

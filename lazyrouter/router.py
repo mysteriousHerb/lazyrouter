@@ -3,7 +3,7 @@
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
 import litellm
@@ -12,6 +12,7 @@ from .config import Config, ModelConfig
 from .constants import (
     INTERNAL_PARAM_KEYS,
     ROUTING_PROMPT_TEMPLATE,
+    ROUTING_WITH_TOOLS_PROMPT_TEMPLATE,
     TOOL_PREDICTION_PROMPT_TEMPLATE,
 )
 from .error_logger import log_provider_error
@@ -37,6 +38,7 @@ class RoutingResult:
     num_context_messages: int = 0
     latency_ms: float = 0.0
     reasoning: Optional[str] = None
+    predicted_tools: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -261,13 +263,21 @@ class LLMRouter:
         return status_code == 422 or "422" in str(error)
 
     async def route(
-        self, messages: List[Dict[str, str]], exclude_models: Optional[set] = None
+        self,
+        messages: List[Dict[str, str]],
+        exclude_models: Optional[set] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        prediction_min_tools: Optional[int] = None,
+        prediction_max_tools: Optional[int] = None,
     ) -> RoutingResult:
         """Route the request to the most appropriate model.
 
         Args:
             messages: List of message dicts with 'role' and 'content'
             exclude_models: Models to exclude from selection
+            tools: Optional tool list to co-select alongside model
+            prediction_min_tools: Min tools to return when tools are provided
+            prediction_max_tools: Max tools to return when tools are provided
 
         Returns:
             RoutingResult with selected model name and raw router response
@@ -357,24 +367,52 @@ class LLMRouter:
         model_descriptions = self._build_model_descriptions(
             exclude_models=excluded_models
         )
+        available_tool_names: List[str] = []
+        tool_descriptions = ""
+        min_tools = 0
+        max_tools = 0
+        if tools:
+            available_tool_names = self._extract_tool_names(tools)
+            if available_tool_names:
+                max_tools = (
+                    min(prediction_max_tools, len(available_tool_names))
+                    if prediction_max_tools
+                    else len(available_tool_names)
+                )
+                min_tools = (
+                    min(prediction_min_tools, max_tools)
+                    if prediction_min_tools is not None
+                    else 0
+                )
+                tool_descriptions = self._build_tool_descriptions(tools)
 
-        # Use custom prompt from config if provided, otherwise use default
-        prompt_template = self.config.router.prompt or ROUTING_PROMPT_TEMPLATE
-        try:
-            routing_prompt = prompt_template.format(
+        if available_tool_names:
+            routing_prompt = ROUTING_WITH_TOOLS_PROMPT_TEMPLATE.format(
                 model_descriptions=model_descriptions,
+                tool_descriptions=tool_descriptions,
                 context=conversation_context,
                 current_request=current_request,
+                min_tools=min_tools,
+                max_tools=max_tools,
             )
-        except (KeyError, ValueError, IndexError) as fmt_err:
-            logger.warning(
-                f"Custom prompt format failed ({fmt_err}); falling back to default template"
-            )
-            routing_prompt = ROUTING_PROMPT_TEMPLATE.format(
-                model_descriptions=model_descriptions,
-                context=conversation_context,
-                current_request=current_request,
-            )
+        else:
+            # Use custom prompt from config if provided, otherwise use default
+            prompt_template = self.config.router.prompt or ROUTING_PROMPT_TEMPLATE
+            try:
+                routing_prompt = prompt_template.format(
+                    model_descriptions=model_descriptions,
+                    context=conversation_context,
+                    current_request=current_request,
+                )
+            except (KeyError, ValueError, IndexError) as fmt_err:
+                logger.warning(
+                    f"Custom prompt format failed ({fmt_err}); falling back to default template"
+                )
+                routing_prompt = ROUTING_PROMPT_TEMPLATE.format(
+                    model_descriptions=model_descriptions,
+                    context=conversation_context,
+                    current_request=current_request,
+                )
 
         # Combined context for logging
         full_context = f"{conversation_context}\n\nCURRENT: {current_request}"
@@ -396,6 +434,18 @@ class LLMRouter:
                 "model": {"type": "string", "description": "The selected model name"},
             }
             required_fields = ["reasoning", "model"]
+            if available_tool_names:
+                tools_schema: Dict[str, Any] = {
+                    "type": "array",
+                    "items": {"type": "string", "enum": available_tool_names},
+                    "uniqueItems": True,
+                }
+                if min_tools > 0:
+                    tools_schema["minItems"] = min_tools
+                if max_tools > 0:
+                    tools_schema["maxItems"] = max_tools
+                schema_properties["tools"] = tools_schema
+                required_fields.append("tools")
 
             response_format = {
                 "type": "json_schema",
@@ -469,10 +519,26 @@ class LLMRouter:
 
             # Parse JSON response
             reasoning = None
+            predicted_tools: List[str] = []
             try:
                 response_data = json.loads(raw_content)
                 selected_model = response_data.get("model", "").strip()
                 reasoning = response_data.get("reasoning")
+                if available_tool_names:
+                    names = response_data.get("tools", [])
+                    if isinstance(names, list):
+                        seen = set()
+                        for name in names:
+                            if not isinstance(name, str):
+                                continue
+                            stripped = name.strip()
+                            if (
+                                stripped
+                                and stripped in available_tool_names
+                                and stripped not in seen
+                            ):
+                                seen.add(stripped)
+                                predicted_tools.append(stripped)
 
             except json.JSONDecodeError:
                 logger.error(f"Failed to parse JSON response: {raw_content}")
@@ -485,6 +551,21 @@ class LLMRouter:
                     f"falling back to first available model"
                 )
                 selected_model = available_models[0]
+
+            if available_tool_names and len(predicted_tools) < min_tools:
+                logger.warning(
+                    "[router-call] tool prediction returned %d tool(s), below min=%d; filling deterministically",
+                    len(predicted_tools),
+                    min_tools,
+                )
+                seen = set(predicted_tools)
+                for name in available_tool_names:
+                    if name in seen:
+                        continue
+                    predicted_tools.append(name)
+                    seen.add(name)
+                    if len(predicted_tools) >= min_tools:
+                        break
 
             latency_ms = (time.monotonic() - start_time) * 1000
 
@@ -508,6 +589,7 @@ class LLMRouter:
                 num_context_messages=num_context_messages,
                 latency_ms=latency_ms,
                 reasoning=reasoning,
+                predicted_tools=predicted_tools,
             )
 
         except Exception as e:

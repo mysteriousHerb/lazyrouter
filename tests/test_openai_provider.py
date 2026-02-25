@@ -191,19 +191,24 @@ def test_router_chat_completion_retries_without_max_tokens_after_stream_options_
     assert chunks[-1] == "data: [DONE]\n\n"
 
 
-def test_router_predict_tools_parses_response(monkeypatch):
+def test_router_route_with_tools_parses_selected_tools(monkeypatch):
+    captured = {}
+
     async def _fake_acompletion(**kwargs):
+        captured.update(kwargs)
         return _FakeResponse(
             {
                 "choices": [
                     {
                         "message": {
                             "content": (
-                                '{"reasoning":"Need read+grep","tools":["read","grep","read","missing"]}'
+                                '{"reasoning":"Need read+grep","model":"m1","tools":["read","grep","read","missing"]}'
                             )
-                        }
+                        },
+                        "finish_reason": "stop",
                     }
-                ]
+                ],
+                "id": "resp-tool-route",
             }
         )
 
@@ -211,7 +216,7 @@ def test_router_predict_tools_parses_response(monkeypatch):
     router = LLMRouter(_config())
 
     result = asyncio.run(
-        router.predict_tools(
+        router.route(
             messages=[{"role": "user", "content": "Find TODOs in file and inspect."}],
             tools=[
                 {
@@ -227,15 +232,23 @@ def test_router_predict_tools_parses_response(monkeypatch):
                     "function": {"name": "write", "description": "Write files"},
                 },
             ],
-            max_tools=2,
+            prediction_min_tools=1,
+            prediction_max_tools=2,
         )
     )
 
-    assert result.tool_names == ["read", "grep"]
+    assert result.model == "m1"
+    assert result.predicted_tools == ["read", "grep"]
     assert result.reasoning == "Need read+grep"
+    assert "response_format" in captured
+    tools_schema = captured["response_format"]["json_schema"]["schema"]["properties"][
+        "tools"
+    ]
+    assert tools_schema["minItems"] == 1
+    assert tools_schema["maxItems"] == 2
 
 
-def test_router_predict_tools_uses_fallback_backend(monkeypatch):
+def test_router_route_with_tools_uses_fallback_backend(monkeypatch):
     calls = []
 
     async def _fake_acompletion(**kwargs):
@@ -247,10 +260,12 @@ def test_router_predict_tools_uses_fallback_backend(monkeypatch):
                 "choices": [
                     {
                         "message": {
-                            "content": '{"reasoning":"Need edit","tools":["edit"]}'
-                        }
+                            "content": '{"reasoning":"Need edit","model":"m1","tools":["edit"]}'
+                        },
+                        "finish_reason": "stop",
                     }
-                ]
+                ],
+                "id": "resp-fallback",
             }
         )
 
@@ -258,14 +273,16 @@ def test_router_predict_tools_uses_fallback_backend(monkeypatch):
     router = LLMRouter(_config(with_fallback=True))
 
     result = asyncio.run(
-        router.predict_tools(
+        router.route(
             messages=[{"role": "user", "content": "Edit this file"}],
             tools=[
                 {"type": "function", "function": {"name": "edit"}},
                 {"type": "function", "function": {"name": "read"}},
             ],
+            prediction_min_tools=1,
+            prediction_max_tools=2,
         )
     )
 
-    assert result.tool_names == ["edit"]
+    assert result.predicted_tools == ["edit"]
     assert len(calls) == 2

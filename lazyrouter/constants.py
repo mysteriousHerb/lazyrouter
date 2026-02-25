@@ -84,5 +84,35 @@ Return JSON with:
 
 Only use tool names from the available tools list."""
 
+# Combined routing + tool selection prompt template (router.py)
+ROUTING_WITH_TOOLS_PROMPT_TEMPLATE = """You are a model router and tool planner.
+
+Select the best model, then choose a practical tool set for this request.
+Tool selection should cover:
+1) immediate steps, and
+2) likely consequence/follow-up steps in this turn.
+
+Be moderately permissive, not overly strict.
+Pick at least {min_tools} and at most {max_tools} tools.
+
+Available models:
+{model_descriptions}
+
+Available tools:
+{tool_descriptions}
+
+Recent conversation context:
+{context}
+
+Current user request:
+{current_request}
+
+Return JSON with:
+- reasoning: short explanation
+- model: selected model name
+- tools: array of selected tool names
+
+Only use model/tool names from the provided lists."""
+
 # Cache tracker constants (cache_tracker.py)
 CACHE_TIMESTAMPS_MAX = 4096
