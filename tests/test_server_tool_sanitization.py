@@ -168,3 +168,43 @@ def test_gemini_message_sanitizer_uses_clean_tool_result_header_when_ids_missing
     out = sanitize_messages_for_gemini(messages)
     assert out[0]["role"] == "user"
     assert out[0]["content"] == "[tool_result]\nresult payload"
+
+
+def test_gemini_message_sanitizer_normalizes_none_content_to_empty_string():
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "read", "arguments": "{}"},
+                }
+            ],
+        }
+    ]
+
+    out = sanitize_messages_for_gemini(messages)
+
+    assert out[0]["role"] == "assistant"
+    assert out[0]["content"] == ""
+    assert out[0]["tool_calls"][0]["id"] == "call_1"
+
+
+def test_gemini_message_sanitizer_drops_invalid_list_parts():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text"},
+                {"type": "text", "text": "hello"},
+                {"type": "image_url", "image_url": {"url": ""}},
+            ],
+        }
+    ]
+
+    out = sanitize_messages_for_gemini(messages)
+
+    assert out[0]["role"] == "user"
+    assert out[0]["content"] == [{"type": "text", "text": "hello"}]

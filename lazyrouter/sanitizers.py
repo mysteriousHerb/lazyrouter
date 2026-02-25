@@ -21,6 +21,15 @@ GEMINI_MESSAGE_DROP_FIELDS = {
     "thinking_content",
     "thinking_blocks",
 }
+GEMINI_CONTENT_PAYLOAD_KEYS = {
+    "image_url",
+    "input_audio",
+    "inline_data",
+    "file_data",
+    "file",
+    "function_call",
+    "function_response",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +70,57 @@ def sanitize_gemini_tool_call(tool_call: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _sanitize_gemini_content_list(content: List[Any]) -> List[Any] | str:
+    """Normalize list content blocks to avoid invalid empty Gemini parts."""
+    normalized: List[Any] = []
+
+    for item in content:
+        if isinstance(item, str):
+            if item:
+                normalized.append({"type": "text", "text": item})
+            continue
+
+        if not isinstance(item, dict):
+            continue
+
+        # Keep any textual block by normalizing to the canonical OpenAI text part.
+        text_value = item.get("text")
+        if isinstance(text_value, str):
+            normalized.append({"type": "text", "text": text_value})
+            continue
+
+        item_type = str(item.get("type", "")).strip().lower()
+        if item_type == "image_url":
+            image_url = item.get("image_url")
+            if isinstance(image_url, dict):
+                url = image_url.get("url")
+                if isinstance(url, str) and url.strip():
+                    normalized.append(item)
+            elif isinstance(image_url, str) and image_url.strip():
+                normalized.append({"type": "image_url", "image_url": {"url": image_url}})
+            continue
+
+        if item_type == "input_audio":
+            input_audio = item.get("input_audio")
+            if (
+                isinstance(input_audio, dict)
+                and isinstance(input_audio.get("data"), str)
+                and isinstance(input_audio.get("format"), str)
+            ):
+                normalized.append(item)
+            continue
+
+        # Keep known payload-bearing blocks only when a payload key is present.
+        if any(key in item and item.get(key) is not None for key in GEMINI_CONTENT_PAYLOAD_KEYS):
+            normalized.append(item)
+
+    if normalized:
+        return normalized
+
+    # Fallback to plain text; guarantees non-list invalid payloads do not reach Gemini.
+    return content_to_text(content) or ""
+
+
 def sanitize_messages_for_gemini(
     messages: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
@@ -78,6 +138,14 @@ def sanitize_messages_for_gemini(
 
         for key in GEMINI_MESSAGE_DROP_FIELDS:
             msg.pop(key, None)
+
+        content = msg.get("content")
+        if content is None:
+            msg["content"] = ""
+        elif isinstance(content, list):
+            msg["content"] = _sanitize_gemini_content_list(content)
+        elif isinstance(content, dict):
+            msg["content"] = content_to_text(content)
 
         if role == "assistant":
             tool_calls = msg.get("tool_calls")
