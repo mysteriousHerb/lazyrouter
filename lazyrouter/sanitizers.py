@@ -74,6 +74,17 @@ def _sanitize_gemini_content_list(content: List[Any]) -> List[Any] | str:
     """Normalize list content blocks to avoid invalid empty Gemini parts."""
     normalized: List[Any] = []
 
+    def _has_non_empty_value(value: Any) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, dict):
+            return any(_has_non_empty_value(v) for v in value.values())
+        if isinstance(value, list):
+            return any(_has_non_empty_value(v) for v in value)
+        return True
+
     for item in content:
         if isinstance(item, str):
             if item:
@@ -111,7 +122,19 @@ def _sanitize_gemini_content_list(content: List[Any]) -> List[Any] | str:
             continue
 
         # Keep known payload-bearing blocks only when a payload key is present.
-        if any(key in item and item.get(key) is not None for key in GEMINI_CONTENT_PAYLOAD_KEYS):
+        if any(
+            key in item and _has_non_empty_value(item.get(key))
+            for key in GEMINI_CONTENT_PAYLOAD_KEYS
+        ):
+            normalized.append(item)
+            continue
+
+        # Broad fallback: keep non-empty typed blocks to avoid dropping
+        # future/experimental multimodal parts from upstream clients.
+        if item_type and any(
+            key != "type" and _has_non_empty_value(value)
+            for key, value in item.items()
+        ):
             normalized.append(item)
 
     if normalized:

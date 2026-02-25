@@ -249,3 +249,41 @@ def test_gemini_message_sanitizer_normalizes_string_image_url_part():
     assert out[0]["content"] == [
         {"type": "image_url", "image_url": {"url": "https://example.com/dog.png"}}
     ]
+
+
+def test_gemini_message_sanitizer_keeps_unknown_non_empty_typed_part():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_video",
+                    "video": {"url": "https://example.com/clip.mp4"},
+                }
+            ],
+        }
+    ]
+
+    out = sanitize_messages_for_gemini(messages)
+
+    assert out[0]["role"] == "user"
+    assert out[0]["content"] == [
+        {"type": "input_video", "video": {"url": "https://example.com/clip.mp4"}}
+    ]
+
+
+def test_gemini_message_sanitizer_drops_unknown_empty_typed_part():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_video"},
+                {"type": "text", "text": "fallback"},
+            ],
+        }
+    ]
+
+    out = sanitize_messages_for_gemini(messages)
+
+    assert out[0]["role"] == "user"
+    assert out[0]["content"] == [{"type": "text", "text": "fallback"}]
