@@ -77,22 +77,11 @@ def _extract_tool_name(tool: Any) -> Optional[str]:
     return None
 
 
-def _format_tool_names_for_log(names: List[str], max_items: int = 20) -> str:
-    """Format tool names for concise info-level logging."""
-    if not names:
-        return "[]"
-    shown = names[:max_items]
-    if len(names) <= max_items:
-        return "[" + ", ".join(shown) + "]"
-    return "[" + ", ".join(shown) + f", ... (+{len(names) - max_items} more)]"
-
-
 def _filter_tools_for_model(
     tools: List[Any],
     model_name: str,
     model_config: Optional["ModelConfig"],
     cfg: "Config",
-    predicted_tool_names: Optional[set[str]] = None,
 ) -> List[Any]:
     """Apply configured tool filtering for non-cacheable models."""
     filter_cfg = getattr(cfg, "tool_filtering", None)
@@ -116,10 +105,6 @@ def _filter_tools_for_model(
         for name in getattr(filter_cfg, "always_included", [])
         if str(name).strip()
     }
-    if getattr(filter_cfg, "use_router_prediction", False) and predicted_tool_names:
-        allowed_names.update(
-            {name.strip() for name in predicted_tool_names if name.strip()}
-        )
     if not allowed_names:
         return tools
 
@@ -135,13 +120,10 @@ def _filter_tools_for_model(
         return tools
 
     logger.info(
-        "[tool-filter] model=%s filtered tools %d -> %d | kept=%s",
+        "[tool-filter] model=%s filtered tools %d -> %d",
         model_name,
         len(tools),
         len(filtered_tools),
-        _format_tool_names_for_log(
-            [name for name in (_extract_tool_name(tool) for tool in filtered_tools) if name]
-        ),
     )
     return filtered_tools
 
@@ -172,8 +154,6 @@ class RequestContext:
     routing_response: Optional[str] = None
     routing_reasoning: Optional[str] = None
     router_skipped_reason: Optional[str] = None
-    predicted_tool_names: set[str] = dataclasses.field(default_factory=set)
-    tool_prediction_reasoning: Optional[str] = None
 
     # Step 3: context compression
     compression_stats: Optional[Dict[str, Any]] = None
@@ -196,7 +176,6 @@ def _prepare_for_model(
     messages: list,
     request: "ChatCompletionRequest",
     cfg: "Config",
-    predicted_tool_names: Optional[set[str]] = None,
 ) -> tuple:
     """Pure function: returns (provider_messages, extra_kwargs, api_style) for a model,
     or (None, None, None) if the model is not found in config."""
@@ -211,13 +190,7 @@ def _prepare_for_model(
         prep_messages = sanitize_messages_for_gemini(messages)
 
     if request.tools:
-        tools = _filter_tools_for_model(
-            request.tools,
-            model_name,
-            mc,
-            cfg,
-            predicted_tool_names=predicted_tool_names,
-        )
+        tools = _filter_tools_for_model(request.tools, model_name, mc, cfg)
         if api_style == "anthropic":
             prep_extra["tools"] = sanitize_tool_schema_for_anthropic(tools)
         elif api_style == "gemini":
@@ -472,13 +445,10 @@ async def _handle_cache_aware_routing(
         )
         return cached_model
 
-    route_kwargs = _route_kwargs_for_tool_prediction(ctx)
     routing_result = await router.route(
         ctx.messages,
         exclude_models=health_checker.unhealthy_models or None,
-        **route_kwargs,
     )
-    _apply_route_tool_prediction(ctx, routing_result)
     routed_model = routing_result.model
     routed_config = ctx.config.llms.get(routed_model)
     if routed_config is None:
@@ -510,54 +480,6 @@ async def _handle_cache_aware_routing(
         cached_model_config.cache_ttl,
     )
     return cached_model
-
-
-def _should_use_router_tool_prediction(ctx: RequestContext) -> bool:
-    """Return True when routing should co-select tools in the same router call."""
-    tools = ctx.request.tools
-    if not tools:
-        return False
-    if ctx.is_tool_continuation_turn:
-        return False
-
-    filter_cfg = getattr(ctx.config, "tool_filtering", None)
-    if not filter_cfg or not getattr(filter_cfg, "enabled", False):
-        return False
-    if not getattr(filter_cfg, "use_router_prediction", False):
-        return False
-    return True
-
-
-def _route_kwargs_for_tool_prediction(ctx: RequestContext) -> Dict[str, Any]:
-    """Build route() kwargs for combined model+tool selection."""
-    if not _should_use_router_tool_prediction(ctx):
-        return {}
-
-    filter_cfg = getattr(ctx.config, "tool_filtering", None)
-    return {
-        "tools": ctx.request.tools,
-        "prediction_min_tools": getattr(filter_cfg, "prediction_relaxed_min_tools", 0),
-        "prediction_max_tools": getattr(filter_cfg, "prediction_max_tools", None),
-    }
-
-
-def _apply_route_tool_prediction(ctx: RequestContext, routing_result: Any) -> None:
-    """Copy predicted tool metadata from routing result into request context."""
-    predicted_names = {
-        str(name).strip()
-        for name in getattr(routing_result, "predicted_tools", [])
-        if str(name).strip()
-    }
-    if predicted_names:
-        ctx.predicted_tool_names = predicted_names
-        logger.info(
-            "[tool-filter] predicted %d tool(s) for model=%s",
-            len(predicted_names),
-            routing_result.model,
-        )
-    reasoning = getattr(routing_result, "reasoning", None)
-    if isinstance(reasoning, str):
-        ctx.tool_prediction_reasoning = reasoning
 
 
 def _update_cache_tracker_for_selection(ctx: RequestContext) -> None:
@@ -636,17 +558,14 @@ async def select_model(ctx: RequestContext, health_checker: Any, router: Any) ->
             )
 
         if selected_model is None:
-            route_kwargs = _route_kwargs_for_tool_prediction(ctx)
             routing_result = await router.route(
                 ctx.messages,
                 exclude_models=health_checker.unhealthy_models or None,
-                **route_kwargs,
             )
             selected_model = routing_result.model
             ctx.routing_result = routing_result
             ctx.routing_response = routing_result.raw_response
             ctx.routing_reasoning = routing_result.reasoning
-            _apply_route_tool_prediction(ctx, routing_result)
     else:
         selected_model = ctx.resolved_model
         logger.info("Using specified model: %s", selected_model)
@@ -659,19 +578,6 @@ async def select_model(ctx: RequestContext, health_checker: Any, router: Any) ->
 
     ctx.selected_model = selected_model
     ctx.model_config = model_config
-
-    filter_cfg = getattr(ctx.config, "tool_filtering", None)
-    if (
-        ctx.predicted_tool_names
-        and filter_cfg
-        and getattr(filter_cfg, "disable_for_cacheable_models", True)
-        and model_config.cache_ttl
-    ):
-        logger.debug(
-            "[tool-filter] clearing predicted tools for cacheable model=%s",
-            selected_model,
-        )
-        ctx.predicted_tool_names.clear()
 
     _update_cache_tracker_for_selection(ctx)
 
@@ -721,11 +627,7 @@ def compress_context(ctx: RequestContext) -> None:
 def prepare_provider(ctx: RequestContext) -> None:
     """Populate ctx.provider_messages, extra_kwargs, provider_api_style, provider_kwargs, effective_max_tokens."""
     provider_messages, extra_kwargs, api_style = _prepare_for_model(
-        ctx.selected_model,
-        ctx.messages,
-        ctx.request,
-        ctx.config,
-        predicted_tool_names=ctx.predicted_tool_names,
+        ctx.selected_model, ctx.messages, ctx.request, ctx.config
     )
     ctx.provider_messages = provider_messages
     ctx.extra_kwargs = extra_kwargs
@@ -802,11 +704,7 @@ async def _backoff_retry_loop(
             if not mc:
                 continue
             prep_messages, prep_extra, api_style = _prepare_for_model(
-                try_model,
-                ctx.messages,
-                ctx.request,
-                ctx.config,
-                predicted_tool_names=ctx.predicted_tool_names,
+                try_model, ctx.messages, ctx.request, ctx.config
             )
             if prep_messages is None:
                 continue
@@ -860,11 +758,7 @@ async def call_with_fallback(
         if not mc:
             continue
         prep_messages, prep_extra, api_style = _prepare_for_model(
-            try_model,
-            ctx.messages,
-            ctx.request,
-            ctx.config,
-            predicted_tool_names=ctx.predicted_tool_names,
+            try_model, ctx.messages, ctx.request, ctx.config
         )
         if prep_messages is None:
             continue

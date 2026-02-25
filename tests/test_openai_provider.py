@@ -35,21 +35,11 @@ class _FakeStream:
             raise StopAsyncIteration from exc
 
 
-def _config(with_fallback: bool = False) -> Config:
-    providers = {"p1": ProviderConfig(api_key="test-key", api_style="openai")}
-    router_cfg = RouterConfig(provider="p1", model="router-model")
-    if with_fallback:
-        providers["p2"] = ProviderConfig(api_key="test-key-2", api_style="openai")
-        router_cfg = RouterConfig(
-            provider="p1",
-            model="router-model",
-            provider_fallback="p2",
-            model_fallback="router-model-fallback",
-        )
+def _config() -> Config:
     return Config(
         serve=ServeConfig(),
-        router=router_cfg,
-        providers=providers,
+        router=RouterConfig(provider="p1", model="router-model"),
+        providers={"p1": ProviderConfig(api_key="test-key", api_style="openai")},
         llms={"m1": ModelConfig(provider="p1", model="gpt-test", description="test")},
         health_check=HealthCheckConfig(enabled=False),
     )
@@ -189,100 +179,3 @@ def test_router_chat_completion_retries_without_max_tokens_after_stream_options_
     assert "max_tokens" not in calls[2]
     assert chunks[0].startswith("data: ")
     assert chunks[-1] == "data: [DONE]\n\n"
-
-
-def test_router_route_with_tools_parses_selected_tools(monkeypatch):
-    captured = {}
-
-    async def _fake_acompletion(**kwargs):
-        captured.update(kwargs)
-        return _FakeResponse(
-            {
-                "choices": [
-                    {
-                        "message": {
-                            "content": (
-                                '{"reasoning":"Need read+grep","model":"m1","tools":["read","grep","read","missing"]}'
-                            )
-                        },
-                        "finish_reason": "stop",
-                    }
-                ],
-                "id": "resp-tool-route",
-            }
-        )
-
-    monkeypatch.setattr(router_mod.litellm, "acompletion", _fake_acompletion)
-    router = LLMRouter(_config())
-
-    result = asyncio.run(
-        router.route(
-            messages=[{"role": "user", "content": "Find TODOs in file and inspect."}],
-            tools=[
-                {
-                    "type": "function",
-                    "function": {"name": "read", "description": "Read files"},
-                },
-                {
-                    "type": "function",
-                    "function": {"name": "grep", "description": "Search content"},
-                },
-                {
-                    "type": "function",
-                    "function": {"name": "write", "description": "Write files"},
-                },
-            ],
-            prediction_min_tools=1,
-            prediction_max_tools=2,
-        )
-    )
-
-    assert result.model == "m1"
-    assert result.predicted_tools == ["read", "grep"]
-    assert result.reasoning == "Need read+grep"
-    assert "response_format" in captured
-    tools_schema = captured["response_format"]["json_schema"]["schema"]["properties"][
-        "tools"
-    ]
-    assert tools_schema["minItems"] == 1
-    assert tools_schema["maxItems"] == 2
-
-
-def test_router_route_with_tools_uses_fallback_backend(monkeypatch):
-    calls = []
-
-    async def _fake_acompletion(**kwargs):
-        calls.append(kwargs)
-        if len(calls) == 1:
-            raise Exception("primary failed")
-        return _FakeResponse(
-            {
-                "choices": [
-                    {
-                        "message": {
-                            "content": '{"reasoning":"Need edit","model":"m1","tools":["edit"]}'
-                        },
-                        "finish_reason": "stop",
-                    }
-                ],
-                "id": "resp-fallback",
-            }
-        )
-
-    monkeypatch.setattr(router_mod.litellm, "acompletion", _fake_acompletion)
-    router = LLMRouter(_config(with_fallback=True))
-
-    result = asyncio.run(
-        router.route(
-            messages=[{"role": "user", "content": "Edit this file"}],
-            tools=[
-                {"type": "function", "function": {"name": "edit"}},
-                {"type": "function", "function": {"name": "read"}},
-            ],
-            prediction_min_tools=1,
-            prediction_max_tools=2,
-        )
-    )
-
-    assert result.predicted_tools == ["edit"]
-    assert len(calls) == 2

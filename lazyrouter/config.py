@@ -143,9 +143,6 @@ class ToolFilteringConfig(BaseModel):
     enabled: bool = True
     disable_for_cacheable_models: bool = True
     always_included: List[str] = Field(default_factory=list)
-    use_router_prediction: bool = False
-    prediction_max_tools: Optional[int] = Field(default=None, gt=0)
-    prediction_relaxed_min_tools: int = Field(default=0, ge=0)
 
 
 class HealthCheckConfig(BaseModel):
