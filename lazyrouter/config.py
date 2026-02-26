@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 
 import yaml
 from dotenv import find_dotenv, load_dotenv
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,13 @@ class ServeConfig(BaseModel):
     show_model_prefix: bool = False
     debug: bool = False
     api_key: Optional[str] = None
+
+    @field_validator("api_key")
+    @classmethod
+    def api_key_must_not_be_empty(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v == "":
+            raise ValueError("serve.api_key must not be an empty string; use null/None to disable authentication")
+        return v
 
 
 class ProviderConfig(BaseModel):

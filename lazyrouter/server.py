@@ -1,12 +1,14 @@
 """FastAPI server with OpenAI-compatible endpoints"""
 
 import json
+import secrets
 import logging
 import time
 from typing import Any, Dict
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .config import Config, load_config
 from .exchange_logger import log_exchange
@@ -44,6 +46,34 @@ ROUTING_REASON_LOG_PREVIEW_CHARS = 140
 config: Config = None
 router: LLMRouter = None
 health_checker: HealthChecker = None
+
+
+
+security = HTTPBearer(auto_error=False)
+
+
+def verify_api_key(
+    auth: HTTPAuthorizationCredentials | None = Depends(security),
+) -> None:
+    """Verify API key from Bearer token."""
+    # If no API key is configured (None), allow all requests.
+    # Empty string API keys are rejected at config load time by ServeConfig validation.
+    if config is None or config.serve.api_key is None:
+        return
+
+    if not auth:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing API Key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if not secrets.compare_digest(auth.credentials, config.serve.api_key):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API Key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 def _configure_logging(debug: bool) -> None:
@@ -451,7 +481,7 @@ def create_app(
         """Return current health-check state and latest per-model benchmark results."""
         return _build_health_status_response()
 
-    @app.post("/v1/chat/completions")
+    @app.post("/v1/chat/completions", dependencies=[Depends(verify_api_key)])
     async def chat_completions(request: ChatCompletionRequest):
         """Chat completions endpoint (OpenAI-compatible)
 
