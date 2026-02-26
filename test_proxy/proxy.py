@@ -371,7 +371,7 @@ async def openai_chat_completions(request: Request):
                 response_data = resp.json()
             except Exception:
                 response_data = resp.text
-            log_exchange(
+            await log_exchange(
                 "openai_completions",
                 request_id,
                 body,
@@ -387,7 +387,7 @@ async def openai_chat_completions(request: Request):
             )
         except Exception as e:
             latency_ms = (time.monotonic() - start_time) * 1000
-            log_exchange(
+            await log_exchange(
                 "openai_completions",
                 request_id,
                 body,
@@ -473,7 +473,7 @@ async def openai_responses(request: Request):
                 response_data = resp.json()
             except Exception:
                 response_data = resp.text
-            log_exchange(
+            await log_exchange(
                 "openai_responses",
                 request_id,
                 body,
@@ -489,7 +489,7 @@ async def openai_responses(request: Request):
             )
         except Exception as e:
             latency_ms = (time.monotonic() - start_time) * 1000
-            log_exchange(
+            await log_exchange(
                 "openai_responses",
                 request_id,
                 body,
@@ -575,7 +575,7 @@ async def anthropic_messages(request: Request):
                 response_data = resp.json()
             except Exception:
                 response_data = resp.text
-            log_exchange(
+            await log_exchange(
                 "anthropic",
                 request_id,
                 body,
@@ -591,7 +591,7 @@ async def anthropic_messages(request: Request):
             )
         except Exception as e:
             latency_ms = (time.monotonic() - start_time) * 1000
-            log_exchange(
+            await log_exchange(
                 "anthropic",
                 request_id,
                 body,
@@ -703,7 +703,7 @@ async def gemini_proxy(request: Request, path: str):
             except Exception:
                 response_data = resp.text
 
-            log_exchange(
+            await log_exchange(
                 "gemini",
                 request_id,
                 {
@@ -725,7 +725,7 @@ async def gemini_proxy(request: Request, path: str):
             )
         except Exception as e:
             latency_ms = (time.monotonic() - start_time) * 1000
-            log_exchange(
+            await log_exchange(
                 "gemini",
                 request_id,
                 {
@@ -887,7 +887,7 @@ async def _proxy_stream(
         await client.aclose()
         latency_ms = (time.monotonic() - start_time) * 1000
         error_text = _sanitize_error_message(e, sensitive_values)
-        log_exchange(
+        await log_exchange(
             api_style,
             request_id,
             request_data if request_data is not None else body,
@@ -917,7 +917,7 @@ async def _proxy_stream(
             }
             if stream_error:
                 response_data["error"] = stream_error
-            log_exchange(
+            await log_exchange(
                 api_style,
                 request_id,
                 request_data if request_data is not None else body,

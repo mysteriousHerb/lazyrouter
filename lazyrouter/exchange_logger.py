@@ -1,8 +1,10 @@
 """Shared request/response exchange logger for test proxy and normal server."""
 
+import asyncio
 import json
 import logging
 import os
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -19,6 +21,9 @@ _LOG_MESSAGE_CONTENT = os.getenv(
     "false",
     "no",
 }
+
+# Lock to ensure atomic writes to log files when running in threads
+_log_lock = threading.Lock()
 
 
 def configure_log_dir(log_dir: str) -> None:
@@ -74,7 +79,7 @@ def _sanitize_exchange_payload(payload: Any) -> Any:
     return _redact_message_content(sanitized)
 
 
-def log_exchange(
+def _log_exchange_sync(
     label: str,
     request_id: str,
     request_data: Dict[str, Any],
@@ -86,20 +91,7 @@ def log_exchange(
     extra: Optional[Dict[str, Any]] = None,
     request_headers: Optional[Dict[str, str]] = None,
 ) -> None:
-    """Log a request/response exchange to JSONL.
-
-    Args:
-        label: Log file label (e.g. api_style for proxy, 'server' for normal server).
-        request_id: Unique request identifier.
-        request_data: The request payload dict.
-        response_data: The response payload (dict or None).
-        latency_ms: Round-trip latency in milliseconds.
-        is_stream: Whether the request was streamed.
-        request_effective_data: Optional processed request payload (e.g. trimmed/sanitized).
-        error: Optional error string if the request failed.
-        extra: Optional extra fields to include (e.g. routing metadata).
-        request_headers: Optional request headers (sensitive values will be redacted).
-    """
+    """Internal synchronous implementation of log_exchange."""
     entry: Dict[str, Any] = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "request_id": request_id,
@@ -120,8 +112,13 @@ def log_exchange(
 
     log_path = get_log_path(label)
     try:
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+        # Serialize entry to JSON string outside the lock to minimize contention
+        json_line = json.dumps(entry, ensure_ascii=False, default=str) + "\n"
+
+        # Acquire lock to prevent interleaved writes from multiple threads
+        with _log_lock:
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(json_line)
     except OSError as log_error:
         logger.warning("Failed to write exchange log (%s): %s", log_path, log_error)
         return
@@ -132,4 +129,48 @@ def log_exchange(
         request_id[:8],
         is_stream,
         latency_ms,
+    )
+
+
+async def log_exchange(
+    label: str,
+    request_id: str,
+    request_data: Dict[str, Any],
+    response_data: Any,
+    latency_ms: float,
+    is_stream: bool,
+    request_effective_data: Optional[Dict[str, Any]] = None,
+    error: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
+    request_headers: Optional[Dict[str, str]] = None,
+) -> None:
+    """Log a request/response exchange to JSONL (async wrapper).
+
+    This function wraps the synchronous file I/O and JSON serialization
+    in a thread to avoid blocking the event loop.
+
+    Args:
+        label: Log file label (e.g. api_style for proxy, 'server' for normal server).
+        request_id: Unique request identifier.
+        request_data: The request payload dict.
+        response_data: The response payload (dict or None).
+        latency_ms: Round-trip latency in milliseconds.
+        is_stream: Whether the request was streamed.
+        request_effective_data: Optional processed request payload (e.g. trimmed/sanitized).
+        error: Optional error string if the request failed.
+        extra: Optional extra fields to include (e.g. routing metadata).
+        request_headers: Optional request headers (sensitive values will be redacted).
+    """
+    await asyncio.to_thread(
+        _log_exchange_sync,
+        label,
+        request_id,
+        request_data,
+        response_data,
+        latency_ms,
+        is_stream,
+        request_effective_data,
+        error,
+        extra,
+        request_headers,
     )
