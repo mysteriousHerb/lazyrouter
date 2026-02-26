@@ -119,7 +119,7 @@ def _log_exchange_sync(
         with _log_lock:
             with open(log_path, "a", encoding="utf-8") as f:
                 f.write(json_line)
-    except OSError as log_error:
+    except (OSError, TypeError, ValueError) as log_error:
         logger.warning("Failed to write exchange log (%s): %s", log_path, log_error)
         return
 
