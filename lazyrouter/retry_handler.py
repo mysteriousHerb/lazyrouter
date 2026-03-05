@@ -4,7 +4,7 @@ import logging
 from typing import List, Optional
 
 from .config import ModelConfig
-from .constants import INITIAL_RETRY_DELAY, MAX_FALLBACK_MODELS, RETRY_MULTIPLIER
+from .constants import MAX_FALLBACK_MODELS
 
 logger = logging.getLogger(__name__)
 
