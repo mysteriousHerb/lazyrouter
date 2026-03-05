@@ -56,3 +56,4 @@ dmypy.json
 
 config.yaml
 logs/
+benchmark_logs/
