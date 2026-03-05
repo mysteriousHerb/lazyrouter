@@ -168,7 +168,7 @@ def _prepare_for_model(
 def _build_prefix_re(known_models: tuple) -> re.Pattern:
     """Build a regex that matches only known model name prefixes like [model-name] ."""
     escaped = sorted((re.escape(m) for m in known_models), key=len, reverse=True)
-    return re.compile(r"^\[(?:" + "|".join(escaped) + r")\] ")
+    return re.compile(r"^(?:\[(?:" + "|".join(escaped) + r")\] )+")
 
 
 def _strip_model_prefixes_from_history(messages: list, known_models: set) -> list:
@@ -178,12 +178,7 @@ def _strip_model_prefixes_from_history(messages: list, known_models: set) -> lis
     prefix_re = _build_prefix_re(tuple(sorted(known_models)))
 
     def _strip_prefixes(text: str) -> str:
-        stripped = text
-        while True:
-            updated = prefix_re.sub("", stripped)
-            if updated == stripped:
-                return stripped
-            stripped = updated
+        return prefix_re.sub("", text)
 
     result = []
     for msg in messages:
