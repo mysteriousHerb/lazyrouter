@@ -4,8 +4,6 @@ Each step takes a RequestContext and mutates it in place.
 Infrastructure dependencies (health_checker, router) are explicit parameters.
 """
 
-from __future__ import annotations
-
 import asyncio
 import dataclasses
 import functools
