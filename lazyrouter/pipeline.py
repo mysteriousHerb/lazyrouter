@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
+from .summarizer import summarize_dropped_messages
 from .cache_tracker import (
     cache_tracker_clear,
     cache_tracker_get,
@@ -518,7 +519,7 @@ async def select_model(ctx: RequestContext, health_checker: Any, router: Any) ->
 # ---------------------------------------------------------------------------
 
 
-def compress_context(ctx: RequestContext) -> None:
+async def compress_context(ctx: RequestContext, router: Any) -> None:
     """Optionally compress ctx.messages; sets ctx.compression_stats."""
     if not ctx.config.context_compression.history_trimming:
         return
@@ -546,6 +547,23 @@ def compress_context(ctx: RequestContext) -> None:
     messages, comp_stats = compress_messages(
         ctx.messages, compression_cfg, model=ctx.model_config.model
     )
+
+    # Check if summarization is enabled and we have dropped messages
+    if getattr(ctx.config.context_compression, "llm_summarize", False) and comp_stats.dropped_messages:
+        summary = await summarize_dropped_messages(comp_stats.dropped_messages, router)
+        if summary:
+            # Find the index to insert the summary message (right after system/developer roles)
+            insert_idx = 0
+            for i, msg in enumerate(messages):
+                # Using the same roles mapping as INSTRUCTION_ROLES in context_compressor
+                if msg.get("role") not in {"system", "developer"}:
+                    insert_idx = i
+                    break
+            else:
+                insert_idx = len(messages)
+
+            messages.insert(insert_idx, {"role": "system", "content": summary})
+
     ctx.messages = messages
     ctx.compression_stats = comp_stats.to_dict()
 

@@ -461,7 +461,7 @@ def create_app(
             ctx = RequestContext(request=request, config=config)
             normalize_messages(ctx)
             await select_model(ctx, health_checker, router)
-            compress_context(ctx)
+            await compress_context(ctx, router)
             prepare_provider(ctx)
 
             # Consolidated routing summary log
