@@ -18,7 +18,7 @@ When a cacheable model (one with `cache_ttl` configured) is selected, the system
 During model selection for subsequent requests in the same session:
 
 1. **Check cache status**: Determine if cache is "hot" (< TTL - buffer)
-   - Example: With 5min TTL and 30s buffer, cache is hot for first 4:30
+   - Example: With 5min TTL and 30s buffer, cache is hot for the first 4:30 after the most recent request (cache tracker refreshes on every hit)
    - Buffer is configurable via `cache_buffer_seconds` in router config
 
 2. **If cache is hot**:
@@ -62,7 +62,7 @@ llms:
 **Buffer Configuration:**
 - `cache_buffer_seconds`: Safety window before cache TTL expires (default: 30 seconds)
 - Accounts for routing latency and ensures cache is still valid when request arrives
-- Example: With 5min TTL and 30s buffer, cache is "hot" for first 4:30
+- Example: With 5min TTL and 30s buffer, cache is "hot" for the first 4:30 following each request (TTL resets on cache read)
 - Adjust based on your routing latency and cache hit requirements
 
 **Deployment Note:**
