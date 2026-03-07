@@ -1,4 +1,3 @@
-import pytest
 from lazyrouter.config import Config, RouterConfig, ModelConfig, ServeConfig, ProviderConfig, HealthCheckConfig
 from lazyrouter.router import LLMRouter
 

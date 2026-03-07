@@ -428,8 +428,7 @@ def _update_cache_tracker_for_selection(ctx: RequestContext) -> None:
         cache_tracker_set(ctx.session_key, ctx.selected_model)
         return
 
-    existing_model, age_seconds = existing_entry
-    buffer_seconds = ctx.config.router.cache_buffer_seconds
+    existing_model, _ = existing_entry
     if existing_model != ctx.selected_model:
         cache_tracker_set(ctx.session_key, ctx.selected_model)
         return

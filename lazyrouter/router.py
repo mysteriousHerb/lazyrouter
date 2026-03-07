@@ -116,7 +116,7 @@ class LLMRouter:
             # We assume a continuous session of at least ~10 turns (1 cache create + 9 cache hits),
             # or the expected number of hits within a single TTL window if it's larger.
             base_hits = int(hot_window_seconds // seconds_per_message)
-            hot_hits = max(9, base_hits) if seconds_per_message <= hot_window_seconds else base_hits
+            hot_hits = max(9, base_hits) if seconds_per_message < hot_window_seconds else base_hits
 
         total_turns = 1 + hot_hits
         cache_create_input_multiplier = self.config.router.cache_create_input_multiplier
