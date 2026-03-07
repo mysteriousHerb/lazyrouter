@@ -2,7 +2,7 @@
 
 ## Overview
 
-Cache-aware routing optimizes prompt cache utilization for models that support prompt caching (e.g., Claude with 60-minute cache TTL). The system intelligently decides when to stick with a cached model versus when to upgrade to a better model, maximizing cache hits while maintaining quality.
+Cache-aware routing optimizes prompt cache utilization for models that support prompt caching (e.g., Claude with 5-minute cache TTL). The system intelligently decides when to stick with a cached model versus when to upgrade to a better model, maximizing cache hits while maintaining quality.
 
 ## How It Works
 
@@ -18,7 +18,7 @@ When a cacheable model (one with `cache_ttl` configured) is selected, the system
 During model selection for subsequent requests in the same session:
 
 1. **Check cache status**: Determine if cache is "hot" (< TTL - buffer)
-   - Example: With 60min TTL and 30s buffer, cache is hot for first 59:30
+   - Example: With 5min TTL and 30s buffer, cache is hot for first 4:30
    - Buffer is configurable via `cache_buffer_seconds` in router config
 
 2. **If cache is hot**:
@@ -62,7 +62,7 @@ llms:
 **Buffer Configuration:**
 - `cache_buffer_seconds`: Safety window before cache TTL expires (default: 30 seconds)
 - Accounts for routing latency and ensures cache is still valid when request arrives
-- Example: With 60min TTL and 30s buffer, cache is "hot" for first 59:30
+- Example: With 5min TTL and 30s buffer, cache is "hot" for first 4:30
 - Adjust based on your routing latency and cache hit requirements
 
 **Deployment Note:**
@@ -92,14 +92,14 @@ llms:
 
 ### Scenario 3: Expired cache
 - Request 1: Routes to `claude-sonnet-4-5` (cache created)
-- Request 2 (60min later): Router suggests `claude-haiku-4-5`
+- Request 2 (5min later): Router suggests `claude-haiku-4-5`
 - **Decision**: Switch to `claude-haiku-4-5` (cache expired, route freely)
 - **Result**: Cost-optimized routing, new cache created
 
 ### Scenario 4: Custom buffer configuration
 - Config: `cache_ttl: 5`, `cache_buffer_seconds: 60` (1 minute buffer)
 - Request 1: Routes to `claude-sonnet-4-5` (cache created)
-- Request 2 (58:59 later): Cache still hot (expires at 59:00 with 60s buffer)
+- Request 2 (3:59 later): Cache still hot (expires at 4:00 with 60s buffer)
 - **Decision**: Stick with cached model if routing suggests same/worse
 - **Result**: Extended cache preservation for high-latency environments
 
@@ -126,9 +126,9 @@ llms:
 Cache-aware routing decisions are logged:
 
 ```
-[cache-aware] sticking with claude-sonnet-4-5 (cache_age=45.2s, ttl=60min)
+[cache-aware] sticking with claude-sonnet-4-5 (cache_age=45.2s, ttl=5min)
 [cache-aware] upgrading from claude-sonnet-4-5 to claude-opus-4-6 (cache_age=60.1s, hot cache preserved)
-[cache-aware] cache expired for claude-sonnet-4-5 (age=3601.5s, ttl=60min), routing freely
+[cache-aware] cache expired for claude-sonnet-4-5 (age=301.5s, ttl=5min), routing freely
 ```
 
 ## Future Enhancements
