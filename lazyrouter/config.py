@@ -145,6 +145,9 @@ class HealthCheckConfig(BaseModel):
     idle_after_seconds: int = (
         300  # pause background checks after this many seconds without chat traffic
     )
+    stagger_seconds: float = (
+        0.5  # stagger model probes by this many seconds to avoid concurrent spikes
+    )
 
     @model_validator(mode="after")
     def validate_intervals(self) -> "HealthCheckConfig":
@@ -155,6 +158,8 @@ class HealthCheckConfig(BaseModel):
             raise ValueError("health_check.max_latency_ms must be > 0")
         if self.idle_after_seconds <= 0:
             raise ValueError("health_check.idle_after_seconds must be > 0")
+        if self.stagger_seconds < 0:
+            raise ValueError("health_check.stagger_seconds must be >= 0")
         return self
 
 
