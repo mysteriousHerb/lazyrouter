@@ -2,7 +2,7 @@
 
 ## Overview
 
-Cache-aware routing optimizes prompt cache utilization for models that support prompt caching (e.g., Claude with 60-minute cache TTL). The system intelligently decides when to stick with a cached model versus when to upgrade to a better model, maximizing cache hits while maintaining quality.
+Cache-aware routing optimizes prompt cache utilization for models that support prompt caching (e.g., Claude with 5-minute cache TTL). The system intelligently decides when to stick with a cached model versus when to upgrade to a better model, maximizing cache hits while maintaining quality.
 
 ## How It Works
 
@@ -56,7 +56,7 @@ llms:
     description: "Fast model with good performance"
     coding_elo: 1386
     writing_elo: 1450
-    cache_ttl: 60  # Cache TTL in minutes
+    cache_ttl: 5  # Cache TTL in minutes
 ```
 
 **Buffer Configuration:**
@@ -97,7 +97,7 @@ llms:
 - **Result**: Cost-optimized routing, new cache created
 
 ### Scenario 4: Custom buffer configuration
-- Config: `cache_ttl: 60`, `cache_buffer_seconds: 60` (1 minute buffer)
+- Config: `cache_ttl: 5`, `cache_buffer_seconds: 60` (1 minute buffer)
 - Request 1: Routes to `claude-sonnet-4-5` (cache created)
 - Request 2 (3:59 later): Cache still hot (expires at 4:00 with 60s buffer)
 - **Decision**: Stick with cached model if routing suggests same/worse
@@ -109,7 +109,7 @@ llms:
 - `config.py`: Added `cache_ttl` field to `ModelConfig`
 - `cache_tracker.py`: New module for cache timestamp tracking
 - `pipeline.py`: Integrated cache-aware logic in `select_model()`
-- `config.yaml`: Added `cache_ttl: 60` to Claude models
+- `config.yaml`: Added `cache_ttl: 5` to Claude models
 
 ### Key Functions
 - `cache_tracker_set(session_key, model_name)`: Record cache creation

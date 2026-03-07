@@ -78,7 +78,7 @@ llms:
     description: "Balanced quality model for coding and writing."
     provider: anthropic
     model: "claude-3-5-sonnet-latest"
-    # cache_ttl: 60  # 60-minute prompt caching window (enables cache-aware estimation)
+    # cache_ttl: 5  # 5-minute prompt caching window (enables cache-aware estimation)
     # input_price: 3.0  # With cache_ttl set, router also computes est_cached_input_price
     input_price: 3.0
     output_price: 15.0
