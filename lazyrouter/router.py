@@ -9,7 +9,11 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 import litellm
 
 from .config import Config, ModelConfig
-from .constants import INTERNAL_PARAM_KEYS, ROUTING_PROMPT_TEMPLATE
+from .constants import (
+    INTERNAL_PARAM_KEYS,
+    ROUTING_PROMPT_TEMPLATE,
+    ROUTING_USER_DATA_TEMPLATE,
+)
 from .error_logger import log_provider_error
 from .litellm_utils import build_litellm_params
 from .message_utils import content_to_text, tool_call_name_by_id
@@ -274,21 +278,37 @@ class LLMRouter:
         )
 
         # Use custom prompt from config if provided, otherwise use default
+        use_custom_prompt = self.config.router.prompt is not None
         prompt_template = self.config.router.prompt or ROUTING_PROMPT_TEMPLATE
         try:
-            routing_prompt = prompt_template.format(
-                model_descriptions=model_descriptions,
-                context=conversation_context,
-                current_request=current_request,
-            )
+            if use_custom_prompt:
+                routing_prompt = prompt_template.format(
+                    model_descriptions=model_descriptions,
+                    context=conversation_context,
+                    current_request=current_request,
+                )
+            else:
+                routing_prompt = ROUTING_PROMPT_TEMPLATE
         except (KeyError, ValueError, IndexError) as fmt_err:
             logger.warning(
                 f"Custom prompt format failed ({fmt_err}); falling back to default template"
             )
-            routing_prompt = ROUTING_PROMPT_TEMPLATE.format(
+            use_custom_prompt = False
+            routing_prompt = ROUTING_PROMPT_TEMPLATE
+            routing_user_data = ROUTING_USER_DATA_TEMPLATE.format(
                 model_descriptions=model_descriptions,
                 context=conversation_context,
                 current_request=current_request,
+            )
+        else:
+            routing_user_data = (
+                ROUTING_USER_DATA_TEMPLATE.format(
+                    model_descriptions=model_descriptions,
+                    context=conversation_context,
+                    current_request=current_request,
+                )
+                if not self.config.router.prompt
+                else None
             )
 
         # Combined context for logging
@@ -300,7 +320,14 @@ class LLMRouter:
 
         # Call routing model
         try:
-            routing_messages = [{"role": "user", "content": routing_prompt}]
+            routing_messages = (
+                [{"role": "user", "content": routing_prompt}]
+                if use_custom_prompt
+                else [
+                    {"role": "system", "content": routing_prompt},
+                    {"role": "user", "content": routing_user_data},
+                ]
+            )
             # Define JSON schema for structured output
             schema_name = "model_selection"
             schema_properties = {
