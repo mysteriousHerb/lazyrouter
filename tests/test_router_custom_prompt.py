@@ -219,7 +219,7 @@ Request: {current_request}"""
         "id": "test-id",
         "choices": [
             {
-                "message": {"content": '{"reasoning": "test", "model": "model-a"}'},
+                "message": {"content": '{"evaluation": "eval test", "reasoning": "test", "model": "model-a"}'},
                 "finish_reason": "stop",
             }
         ],
@@ -275,7 +275,7 @@ def test_router_uses_fallback_backend_when_primary_router_fails():
         "id": "test-id",
         "choices": [
             {
-                "message": {"content": '{"reasoning":"fallback ok","model":"model-a"}'},
+                "message": {"content": '{"evaluation":"eval ok","reasoning":"fallback ok","model":"model-a"}'},
                 "finish_reason": "stop",
             }
         ],
@@ -329,7 +329,7 @@ Request: {current_request}"""
         "id": "test-id",
         "choices": [
             {
-                "message": {"content": '{"reasoning": "test", "model": "model-a"}'},
+                "message": {"content": '{"evaluation": "eval test", "reasoning": "test", "model": "model-a"}'},
                 "finish_reason": "stop",
             }
         ],

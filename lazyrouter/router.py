@@ -343,13 +343,17 @@ class LLMRouter:
             # Define JSON schema for structured output
             schema_name = "model_selection"
             schema_properties = {
+                "evaluation": {
+                    "type": "string",
+                    "description": "Numerical evaluation comparing effective costs vs. Elo for the models",
+                },
                 "reasoning": {
                     "type": "string",
-                    "description": "Brief reasoning for model selection",
+                    "description": "Brief reasoning for model selection based on the evaluation",
                 },
                 "model": {"type": "string", "description": "The selected model name"},
             }
-            required_fields = ["reasoning", "model"]
+            required_fields = ["evaluation", "reasoning", "model"]
 
             response_format = {
                 "type": "json_schema",
@@ -426,7 +430,15 @@ class LLMRouter:
             try:
                 response_data = json.loads(raw_content)
                 selected_model = response_data.get("model", "").strip()
-                reasoning = response_data.get("reasoning")
+                evaluation = response_data.get("evaluation")
+                raw_reasoning = response_data.get("reasoning")
+
+                reasoning_parts = []
+                if evaluation:
+                    reasoning_parts.append(f"Evaluation: {evaluation}")
+                if raw_reasoning:
+                    reasoning_parts.append(f"Reasoning: {raw_reasoning}")
+                reasoning = "\n".join(reasoning_parts) if reasoning_parts else None
 
             except json.JSONDecodeError:
                 logger.error(f"Failed to parse JSON response: {raw_content}")

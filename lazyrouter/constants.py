@@ -57,7 +57,7 @@ CURRENT USER REQUEST (most important for routing):
 
 Choose the model that best matches the CURRENT REQUEST's requirements for quality, speed, and cost-effectiveness. The conversation context is provided for reference, but prioritize the current request.
 
-Respond with brief reasoning (1-2 sentences) first, then your model choice."""
+First, provide an evaluation comparing the models numerically (costs vs. Elo). Then, provide a brief reasoning (1-2 sentences) and your model choice."""
 
 # Cache tracker constants (cache_tracker.py)
 CACHE_TIMESTAMPS_MAX = 4096
