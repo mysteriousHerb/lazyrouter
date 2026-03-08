@@ -118,8 +118,8 @@ def test_load_config_rejects_missing_router_fallback_provider(tmp_path):
         load_config(str(config_file))
 
 
-def test_load_config_rejects_zero_cache_create_input_multiplier(tmp_path):
-    """cache_create_input_multiplier must be strictly positive."""
+def test_load_config_rejects_removed_cache_estimation_fields(tmp_path):
+    """Removed router cache-estimation fields should fail fast."""
     config_file = tmp_path / "config.yaml"
     config_file.write_text(
         textwrap.dedent(
@@ -145,5 +145,5 @@ def test_load_config_rejects_zero_cache_create_input_multiplier(tmp_path):
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="cache_create_input_multiplier"):
+    with pytest.raises(ValueError, match="Removed router config field"):
         load_config(str(config_file))

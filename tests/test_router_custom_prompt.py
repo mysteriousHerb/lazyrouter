@@ -22,6 +22,13 @@ def test_default_prompt_includes_explicit_model_request_instruction():
     assert "honor that request" in ROUTING_PROMPT_TEMPLATE.lower()
 
 
+def test_default_prompt_includes_cacheability_instruction():
+    """Verify default prompt tells router when cacheable models should be preferred."""
+    assert "supports prompt caching" in ROUTING_PROMPT_TEMPLATE
+    assert "Do not invent cache math" in ROUTING_PROMPT_TEMPLATE
+    assert "Do not output per-model comparisons" in ROUTING_PROMPT_TEMPLATE
+
+
 def test_router_uses_default_prompt_when_not_configured():
     """Router should use default prompt when no custom prompt is provided"""
     cfg = Config(
@@ -43,16 +50,11 @@ def test_router_uses_default_prompt_when_not_configured():
     assert router.config.router.prompt is None
 
 
-def test_model_description_includes_conservative_cached_input_price_estimate():
-    """Router metadata should include conservative cached input price estimate."""
+def test_model_description_marks_cacheable_models_without_synthetic_pricing():
+    """Router metadata should mark cacheable models without inventing prices."""
     cfg = Config(
         serve=ServeConfig(),
-        router=RouterConfig(
-            provider="test",
-            model="test-model",
-            cache_buffer_seconds=30,
-            cache_estimated_minutes_per_message=2.0,
-        ),
+        router=RouterConfig(provider="test", model="test-model"),
         providers={"test": ProviderConfig(api_key="test-key", api_style="openai")},
         llms={
             "model-a": ModelConfig(
@@ -70,13 +72,15 @@ def test_model_description_includes_conservative_cached_input_price_estimate():
     router = LLMRouter(cfg)
     desc = router._build_model_descriptions()
 
-    # 5min TTL with 30s buffer and 2min/msg cadence => spm <= hot_window
-    # multiplier = (1.25 + 0.10*9) / 10 = 0.215
-    assert "est_cached_input_price=$0.215/1M (@~2.0min/msg)" in desc
+    assert "input_price=$1.0/1M tokens" in desc
+    assert "cache_ttl=5min" in desc
+    assert "prompt_cache_supported=true" in desc
+    assert "effective_input_price=" not in desc
+    assert "base_input_price=" not in desc
 
 
-def test_model_description_omits_cached_input_estimate_without_cache_ttl():
-    """Do not include cached-input estimate when cache_ttl is unavailable."""
+def test_model_description_omits_cacheability_metadata_without_cache_ttl():
+    """Do not include cacheability metadata when cache_ttl is unavailable."""
     cfg = Config(
         serve=ServeConfig(),
         router=RouterConfig(provider="test", model="test-model"),
@@ -96,41 +100,21 @@ def test_model_description_omits_cached_input_estimate_without_cache_ttl():
 
     router = LLMRouter(cfg)
     desc = router._build_model_descriptions()
-    assert "est_cached_input_price=" not in desc
+    assert "input_price=$1.0/1M tokens" in desc
+    assert "cache_ttl=" not in desc
+    assert "prompt_cache_supported=true" not in desc
 
 
-def test_model_description_uses_configured_cache_multipliers():
-    """Cached input estimate should respect configured create/hit multipliers."""
-    cfg = Config(
-        serve=ServeConfig(),
-        router=RouterConfig(
+def test_router_config_rejects_removed_cache_estimation_knobs():
+    """Removed router cache-estimation knobs should be rejected."""
+    with pytest.raises(ValueError) as exc_info:
+        RouterConfig(
             provider="test",
             model="test-model",
-            cache_buffer_seconds=30,
             cache_estimated_minutes_per_message=2.0,
-            cache_create_input_multiplier=1.5,
-            cache_hit_input_multiplier=0.2,
-        ),
-        providers={"test": ProviderConfig(api_key="test-key", api_style="openai")},
-        llms={
-            "model-a": ModelConfig(
-                provider="test",
-                model="model-a",
-                description="Test model A",
-                input_price=1.0,
-                output_price=2.0,
-                cache_ttl=5,
-            )
-        },
-        health_check=HealthCheckConfig(interval=300, max_latency_ms=10000),
-    )
+        )
 
-    router = LLMRouter(cfg)
-    desc = router._build_model_descriptions()
-
-    # 5min TTL with 30s buffer and 2min/msg cadence => spm <= hot_window
-    # multiplier = (1.5 + 0.2*9) / 10 = 0.33
-    assert "est_cached_input_price=$0.330/1M (@~2.0min/msg)" in desc
+    assert "Removed router config field" in str(exc_info.value)
 
 
 def test_router_accepts_custom_prompt_in_config():

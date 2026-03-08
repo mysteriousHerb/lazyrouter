@@ -40,9 +40,10 @@ INTERNAL_PARAM_KEYS = {
 ROUTING_PROMPT_TEMPLATE = """You are a model router. Analyze the user's query and select the most appropriate model.
 
 Each model has an Elo rating from LMSys Chatbot Arena (higher = better quality) for coding and writing, plus pricing per 1M tokens.
-When provided, est_cached_input_price already includes a conservative cache-adjusted input-cost estimate.
-For multi-turn cost comparisons, prioritize est_cached_input_price over raw input_price.
 Prefer cheaper models for simple tasks. Only pick expensive, high-Elo models when the task genuinely needs top-tier quality.
+If a model includes `cache_ttl`, it supports prompt caching and is preferable for likely multi-round discussions, iterative refinement, or tool-heavy requests.
+For one-shot requests, compare normal input/output prices and Elo directly.
+Do not invent cache math. Treat `cache_ttl` as a qualitative routing advantage for conversations that are likely to continue.
 
 IMPORTANT: If the user explicitly requests a specific model (e.g., "use opus for this", "route to gemini-2.5-pro", "switch to claude-sonnet"), honor that request directly.
 
@@ -57,7 +58,7 @@ CURRENT USER REQUEST (most important for routing):
 
 Choose the model that best matches the CURRENT REQUEST's requirements for quality, speed, and cost-effectiveness. The conversation context is provided for reference, but prioritize the current request.
 
-First, provide an evaluation comparing the models numerically (costs vs. Elo). Then, provide a brief reasoning (1-2 sentences) and your model choice."""
+Provide only a brief reasoning (1-2 sentences) and your model choice. Do not output per-model comparisons or copy the full model metadata back."""
 
 # Cache tracker constants (cache_tracker.py)
 CACHE_TIMESTAMPS_MAX = 4096
