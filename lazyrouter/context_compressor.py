@@ -7,7 +7,7 @@ This module intentionally avoids LLM-dependent compression. It only provides:
 
 import copy
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from .message_utils import content_to_text
@@ -46,6 +46,7 @@ class CompressionStats:
     compressed_tokens: int = 0
     messages_trimmed: int = 0
     messages_dropped: int = 0
+    dropped_messages: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert compression stats to a dictionary with calculated savings."""
@@ -289,6 +290,12 @@ def compress_messages(
         old_tool_oldest_cap,
     ) = _auto_progressive_caps(config, old_count)
 
+    # When summarization is enabled, reserve the summary budget from the total limit
+    effective_max_history_tokens = config.max_history_tokens
+    if getattr(config, "llm_summarize", False):
+        summary_budget = getattr(config, "summary_max_tokens", 500)
+        effective_max_history_tokens = max(0, config.max_history_tokens - summary_budget)
+
     compressed = copy.deepcopy(messages)
 
     for conv_pos in range(old_count):
@@ -360,9 +367,12 @@ def compress_messages(
 
     remaining_count = sum(1 for m in compressed if m is not None)
 
+    # List of (original_index, message) for dropped messages
+    dropped_tuples: List[Tuple[int, Dict[str, Any]]] = []
+
     for strict_phase in (True, False):
         for unit in _drop_candidates(preferred_unprotected_only=strict_phase):
-            if total_tokens <= config.max_history_tokens:
+            if total_tokens <= effective_max_history_tokens:
                 break
 
             unit_messages = []
@@ -370,6 +380,8 @@ def compress_messages(
             for idx in unit:
                 if compressed[idx] is None:
                     continue
+                # Record the dropped message and its original index
+                dropped_tuples.append((idx, compressed[idx]))
                 unit_messages.append(compressed[idx])
                 compressed[idx] = None
                 dropped_count += 1
@@ -386,8 +398,12 @@ def compress_messages(
                 unit_tokens = _estimate_messages_tokens(unit_messages, model=model)
                 total_tokens = max(0, total_tokens - unit_tokens + conversation_overhead)
 
-        if total_tokens <= config.max_history_tokens:
+        if total_tokens <= effective_max_history_tokens:
             break
+
+    # Restore chronological order for dropped messages
+    dropped_tuples.sort(key=lambda x: x[0])
+    stats.dropped_messages = [m for _, m in dropped_tuples]
 
     compressed_messages = [m for m in compressed if m is not None]
     stats.compressed_tokens = _estimate_messages_tokens(

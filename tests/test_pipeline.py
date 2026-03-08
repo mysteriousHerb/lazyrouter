@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 from fastapi import HTTPException
+from unittest.mock import MagicMock
 
 from lazyrouter.config import (
     Config,
@@ -175,20 +176,66 @@ def test_normalize_messages_auto_stays_auto():
 # ---------------------------------------------------------------------------
 
 
-def test_compress_context_noop_when_disabled():
+@pytest.mark.asyncio
+async def test_compress_context_noop_when_disabled():
     ctx = _ctx(config=_config(compression=False))
     ctx.messages = [{"role": "user", "content": "hi"}]
     ctx.selected_model = "m1"
     ctx.model_config = ctx.config.llms["m1"]
     ctx.is_tool_continuation_turn = False
 
-    compress_context(ctx)
+    router_mock = MagicMock()
+
+    await compress_context(ctx, router_mock)
 
     assert ctx.compression_stats is None
     assert ctx.messages == [{"role": "user", "content": "hi"}]
 
 
-def test_compress_context_runs_when_enabled():
+@pytest.mark.asyncio
+async def test_compress_context_with_llm_summarize():
+    cfg = _config(compression=True)
+    cfg.context_compression.llm_summarize = True
+    cfg.context_compression.summary_max_tokens = 500
+    ctx = _ctx(config=cfg)
+
+    ctx.messages = (
+        [{"role": "system", "content": "sys"}]
+        + [
+            msg
+            for i in range(20)
+            for msg in [
+                {"role": "user", "content": f"user message {i} " + "word " * 30},
+                {
+                    "role": "assistant",
+                    "content": f"assistant reply {i} " + "word " * 30,
+                },
+            ]
+        ]
+        + [{"role": "user", "content": "final question"}]
+    )
+    ctx.selected_model = "m1"
+    ctx.model_config = cfg.llms["m1"]
+    ctx.is_tool_continuation_turn = False
+
+    router_mock = MagicMock()
+    router_mock.config = cfg
+
+    from unittest.mock import AsyncMock
+    router_mock.chat_completion = AsyncMock(return_value={"choices": [{"message": {"content": "mocked summary"}}]})
+
+    await compress_context(ctx, router_mock)
+
+    assert ctx.compression_stats is not None
+    assert "original_tokens" in ctx.compression_stats
+
+    # Assert summary message was injected correctly
+    summary_messages = [m for m in ctx.messages if m.get("role") == "system" and "mocked summary" in str(m.get("content", ""))]
+    assert len(summary_messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_compress_context_runs_when_enabled():
     cfg = _config(compression=True)
     ctx = _ctx(config=cfg)
     # Build a long history that will trigger compression
@@ -211,7 +258,9 @@ def test_compress_context_runs_when_enabled():
     ctx.model_config = cfg.llms["m1"]
     ctx.is_tool_continuation_turn = False
 
-    compress_context(ctx)
+    router_mock = MagicMock()
+
+    await compress_context(ctx, router_mock)
 
     assert ctx.compression_stats is not None
     assert "original_tokens" in ctx.compression_stats
