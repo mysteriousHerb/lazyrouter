@@ -415,7 +415,8 @@ class LLMRouter:
                 response_data = json.loads(raw_content)
                 selected_model = response_data.get("model", "").strip()
                 raw_reasoning = response_data.get("reasoning")
-                reasoning = raw_reasoning.strip() if raw_reasoning else None
+                if isinstance(raw_reasoning, str):
+                    reasoning = raw_reasoning.strip() or None
 
             except json.JSONDecodeError:
                 logger.error(f"Failed to parse JSON response: {raw_content}")

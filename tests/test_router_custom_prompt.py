@@ -1,7 +1,7 @@
 """Test custom routing prompt override functionality"""
 
 import asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -276,6 +276,51 @@ Request: {current_request}"""
             # Check that our custom prompt marker is in the actual prompt
             assert "CUSTOM PROMPT TEST:" in prompt_content
             assert "model-a" in result.model
+
+    asyncio.run(run_test())
+
+
+def test_router_ignores_non_string_reasoning_but_keeps_selected_model():
+    """Valid model selections should survive malformed reasoning payloads."""
+    cfg = Config(
+        serve=ServeConfig(),
+        router=RouterConfig(provider="test", model="test-model"),
+        providers={"test": ProviderConfig(api_key="test-key", api_style="openai")},
+        llms={
+            "model-a": ModelConfig(
+                provider="test",
+                model="model-a",
+                description="Test model A",
+            ),
+            "model-b": ModelConfig(
+                provider="test",
+                model="model-b",
+                description="Test model B",
+            ),
+        },
+        health_check=HealthCheckConfig(interval=300, max_latency_ms=10000),
+    )
+
+    router = LLMRouter(cfg)
+    mock_response = MagicMock()
+    mock_response.model_dump.return_value = {
+        "id": "test-id",
+        "choices": [
+            {
+                "message": {
+                    "content": '{"reasoning": {"summary": "bad type"}, "model": "model-b"}'
+                },
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+    async def run_test():
+        with patch("litellm.acompletion", return_value=mock_response):
+            result = await router.route([{"role": "user", "content": "Test request"}])
+            assert result.model == "model-b"
+            assert result.reasoning is None
+            assert result.raw_response is not None
 
     asyncio.run(run_test())
 
