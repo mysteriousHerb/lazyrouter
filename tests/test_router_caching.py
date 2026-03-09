@@ -1,5 +1,13 @@
-from lazyrouter.config import Config, RouterConfig, ModelConfig, ServeConfig, ProviderConfig, HealthCheckConfig
+from lazyrouter.config import (
+    Config,
+    RouterConfig,
+    ModelConfig,
+    ServeConfig,
+    ProviderConfig,
+    HealthCheckConfig,
+)
 from lazyrouter.router import LLMRouter
+
 
 def create_test_config():
     llms = {
@@ -11,7 +19,7 @@ def create_test_config():
             output_price=30.0,
             coding_elo=1200,
             writing_elo=1200,
-            cache_ttl=5
+            cache_ttl=5,
         ),
         "model-b": ModelConfig(
             provider="openai",
@@ -21,8 +29,8 @@ def create_test_config():
             output_price=30.0,
             coding_elo=1200,
             writing_elo=1200,
-            cache_ttl=5
-        )
+            cache_ttl=5,
+        ),
     }
 
     config = Config(
@@ -30,9 +38,10 @@ def create_test_config():
         router=RouterConfig(provider="openai", model="gpt-4"),
         providers={"openai": ProviderConfig(api_key="sk-test")},
         llms=llms,
-        health_check=HealthCheckConfig()
+        health_check=HealthCheckConfig(),
     )
     return config
+
 
 def test_router_caching_behavior():
     config = create_test_config()

@@ -347,7 +347,9 @@ def compress_messages(
     try:
         dummy_message = {"role": "user", "content": "a"}
         tokens_one = _estimate_messages_tokens([dummy_message], model=model)
-        tokens_two = _estimate_messages_tokens([dummy_message, dummy_message], model=model)
+        tokens_two = _estimate_messages_tokens(
+            [dummy_message, dummy_message], model=model
+        )
         conversation_overhead = max(0, 2 * tokens_one - tokens_two)
     except Exception as e:
         # Catch-all to ensure compression never fails due to tokenizer errors.
@@ -384,7 +386,9 @@ def compress_messages(
                 total_tokens = 0
             else:
                 unit_tokens = _estimate_messages_tokens(unit_messages, model=model)
-                total_tokens = max(0, total_tokens - unit_tokens + conversation_overhead)
+                total_tokens = max(
+                    0, total_tokens - unit_tokens + conversation_overhead
+                )
 
         if total_tokens <= config.max_history_tokens:
             break
