@@ -9,7 +9,11 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 import litellm
 
 from .config import Config, ModelConfig
-from .constants import INTERNAL_PARAM_KEYS, ROUTING_PROMPT_TEMPLATE
+from .constants import (
+    INTERNAL_PARAM_KEYS,
+    ROUTING_PROMPT_TEMPLATE,
+    ROUTING_USER_DATA_TEMPLATE,
+)
 from .error_logger import log_provider_error
 from .litellm_utils import build_litellm_params
 from .message_utils import content_to_text, tool_call_name_by_id
@@ -94,38 +98,6 @@ class LLMRouter:
     def _create_routing_provider(self) -> dict:
         return self._build_routing_params()
 
-    def _estimate_cached_input_price(
-        self, model_config: ModelConfig
-    ) -> Optional[float]:
-        """Estimate effective input price using conservative cache assumptions."""
-        if model_config.input_price is None or model_config.cache_ttl is None:
-            return None
-
-        seconds_per_message = (
-            self.config.router.cache_estimated_minutes_per_message * 60.0
-        )
-        hot_window_seconds = (
-            model_config.cache_ttl * 60
-        ) - self.config.router.cache_buffer_seconds
-
-        if hot_window_seconds <= 0:
-            hot_hits = 0
-        else:
-            # Prompt cache TTL refreshes on every read.
-            # If the expected cadence is within the hot window, the cache stays hot indefinitely.
-            # We assume a continuous session of at least ~10 turns (1 cache create + 9 cache hits),
-            # or the expected number of hits within a single TTL window if it's larger.
-            base_hits = int(hot_window_seconds // seconds_per_message)
-            hot_hits = max(9, base_hits) if seconds_per_message < hot_window_seconds else base_hits
-
-        total_turns = 1 + hot_hits
-        cache_create_input_multiplier = self.config.router.cache_create_input_multiplier
-        cache_hit_input_multiplier = self.config.router.cache_hit_input_multiplier
-        effective_multiplier = (
-            cache_create_input_multiplier + (hot_hits * cache_hit_input_multiplier)
-        ) / total_turns
-        return model_config.input_price * effective_multiplier
-
     def _build_model_descriptions(self, exclude_models: Optional[set] = None) -> str:
         """Build formatted string of model descriptions for routing prompt"""
         if not exclude_models and self._cached_full_descriptions:
@@ -146,14 +118,7 @@ class LLMRouter:
                 meta.append(f"output_price=${model_config.output_price}/1M tokens")
             if model_config.cache_ttl is not None:
                 meta.append(f"cache_ttl={model_config.cache_ttl}min")
-                est_cached_input_price = self._estimate_cached_input_price(model_config)
-                if est_cached_input_price is not None:
-                    cadence = self.config.router.cache_estimated_minutes_per_message
-                    meta.append(
-                        "est_cached_input_price="
-                        f"${est_cached_input_price:.3f}/1M "
-                        f"(@~{cadence:.1f}min/msg)"
-                    )
+                meta.append("prompt_cache_supported=true")
             if meta:
                 parts.append(f"  [{', '.join(meta)}]")
             descriptions.append("".join(parts))
@@ -313,21 +278,37 @@ class LLMRouter:
         )
 
         # Use custom prompt from config if provided, otherwise use default
+        use_custom_prompt = self.config.router.prompt is not None
         prompt_template = self.config.router.prompt or ROUTING_PROMPT_TEMPLATE
         try:
-            routing_prompt = prompt_template.format(
-                model_descriptions=model_descriptions,
-                context=conversation_context,
-                current_request=current_request,
-            )
+            if use_custom_prompt:
+                routing_prompt = prompt_template.format(
+                    model_descriptions=model_descriptions,
+                    context=conversation_context,
+                    current_request=current_request,
+                )
+            else:
+                routing_prompt = ROUTING_PROMPT_TEMPLATE
         except (KeyError, ValueError, IndexError) as fmt_err:
             logger.warning(
                 f"Custom prompt format failed ({fmt_err}); falling back to default template"
             )
-            routing_prompt = ROUTING_PROMPT_TEMPLATE.format(
+            use_custom_prompt = False
+            routing_prompt = ROUTING_PROMPT_TEMPLATE
+            routing_user_data = ROUTING_USER_DATA_TEMPLATE.format(
                 model_descriptions=model_descriptions,
                 context=conversation_context,
                 current_request=current_request,
+            )
+        else:
+            routing_user_data = (
+                ROUTING_USER_DATA_TEMPLATE.format(
+                    model_descriptions=model_descriptions,
+                    context=conversation_context,
+                    current_request=current_request,
+                )
+                if not self.config.router.prompt
+                else None
             )
 
         # Combined context for logging
@@ -339,13 +320,20 @@ class LLMRouter:
 
         # Call routing model
         try:
-            routing_messages = [{"role": "user", "content": routing_prompt}]
+            routing_messages = (
+                [{"role": "user", "content": routing_prompt}]
+                if use_custom_prompt
+                else [
+                    {"role": "system", "content": routing_prompt},
+                    {"role": "user", "content": routing_user_data},
+                ]
+            )
             # Define JSON schema for structured output
             schema_name = "model_selection"
             schema_properties = {
                 "reasoning": {
                     "type": "string",
-                    "description": "Brief reasoning for model selection",
+                    "description": "Brief reasoning for model selection without repeating the full model metadata",
                 },
                 "model": {"type": "string", "description": "The selected model name"},
             }
@@ -426,7 +414,9 @@ class LLMRouter:
             try:
                 response_data = json.loads(raw_content)
                 selected_model = response_data.get("model", "").strip()
-                reasoning = response_data.get("reasoning")
+                raw_reasoning = response_data.get("reasoning")
+                if isinstance(raw_reasoning, str):
+                    reasoning = raw_reasoning.strip() or None
 
             except json.JSONDecodeError:
                 logger.error(f"Failed to parse JSON response: {raw_content}")

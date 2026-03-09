@@ -151,8 +151,6 @@ async def _logged_stream(
             meta["router_skip_reason"] = ctx.router_skipped_reason
         if ctx.routing_result and ctx.routing_result.reasoning:
             meta["routing_reasoning"] = ctx.routing_result.reasoning
-        if ctx.routing_response:
-            meta["routing_response"] = ctx.routing_response
         return meta
 
     async def _close_stream_if_possible(stream_obj: Any) -> None:
@@ -341,7 +339,6 @@ def _assemble_non_streaming_response(
         "routing_reasoning": ctx.routing_result.reasoning
         if ctx.routing_result
         else None,
-        "routing_response": ctx.routing_response,
     }
     return response
 

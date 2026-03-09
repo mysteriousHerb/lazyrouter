@@ -362,7 +362,6 @@ python3 ./.trellis/scripts/task.py list-archive    # List archived tasks
 3. **Don't** develop multiple unrelated tasks simultaneously
 4. **Don't** commit code with lint/test errors
 5. **Don't** forget to update spec docs after learning something
-6. [!] **Don't** execute `git commit` - AI should not commit code
 
 ---
 
@@ -370,10 +369,10 @@ python3 ./.trellis/scripts/task.py list-archive    # List archived tasks
 
 ### Must-read Before Development
 
-| Task Type | Must-read Document |
-|-----------|-------------------|
-| Frontend work | `frontend/index.md` → relevant docs |
-| Backend work | `backend/index.md` → relevant docs |
+| Task Type           | Must-read Document                     |
+| ------------------- | -------------------------------------- |
+| Frontend work       | `frontend/index.md` → relevant docs    |
+| Backend work        | `backend/index.md` → relevant docs     |
 | Cross-Layer Feature | `guides/cross-layer-thinking-guide.md` |
 
 ### Commit Convention
