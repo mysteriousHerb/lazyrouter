@@ -45,7 +45,7 @@ router:
   #   Available models: {model_descriptions}
   #   Context: {context}
   #   Current request: {current_request}
-  #   Respond with reasoning and model choice.
+  #   Respond with brief reasoning and model choice.
 
 # Models that can be selected at runtime.
 # ELO source suggestion: https://arena.ai/leaderboard

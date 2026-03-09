@@ -108,7 +108,7 @@ router:
     Available models: {model_descriptions}
     Context: {context}
     Current request: {current_request}
-    Respond with reasoning and model choice.
+    Respond with brief reasoning and model choice.
 ```
 
 The prompt must include these placeholders: `{model_descriptions}`, `{context}`, and `{current_request}`.
