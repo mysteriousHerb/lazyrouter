@@ -419,8 +419,8 @@ class TestLitellmCopilotParams:
             model="claude-haiku-4-5",
         )
         assert params["model"] == "anthropic/claude-haiku-4-5"
+        assert params["api_key"] == "sk-ant-oat01-test-token-value"
         assert "extra_headers" in params
-        assert params["extra_headers"]["authorization"] == "Bearer sk-ant-oat01-test-token-value"
         assert params["extra_headers"]["anthropic-beta"] == "oauth-2025-04-20"
         assert params["extra_headers"]["anthropic-dangerous-direct-browser-access"] == "true"
 
@@ -447,5 +447,57 @@ class TestLitellmCopilotParams:
         )
         assert params["api_base"] == "https://my-proxy.example.com"
         assert params["model"] == "claude-opus-4-6"
-        assert params["extra_headers"]["authorization"] == "Bearer sk-ant-oat01-custom-base"
+        assert params["api_key"] == "sk-ant-oat01-custom-base"
         assert params["extra_headers"]["anthropic-beta"] == "oauth-2025-04-20"
+        assert params["extra_headers"]["anthropic-dangerous-direct-browser-access"] == "true"
+
+    def test_litellm_oauth_patch_removes_xapikey(self):
+        """The LiteLLM patch should replace x-api-key with Authorization: Bearer
+        when the key is an OAuth token."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        cfg = AnthropicModelInfo()
+        headers = cfg.validate_environment(
+            headers={"anthropic-beta": "oauth-2025-04-20"},
+            model="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={},
+            api_key="sk-ant-oat01-test-token",
+        )
+        assert "x-api-key" not in headers
+        assert headers["Authorization"] == "Bearer sk-ant-oat01-test-token"
+        assert "anthropic-dangerous-direct-browser-access" in headers
+
+    def test_litellm_oauth_patch_messages_api(self):
+        """The Messages API path should also replace x-api-key with
+        Authorization: Bearer for OAuth tokens."""
+        from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+            AnthropicMessagesConfig,
+        )
+
+        cfg = AnthropicMessagesConfig()
+        headers, _api_base = cfg.validate_anthropic_messages_environment(
+            headers={"anthropic-beta": "oauth-2025-04-20"},
+            model="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={},
+            api_key="sk-ant-oat01-test-token",
+        )
+        assert "x-api-key" not in headers
+        assert headers["Authorization"] == "Bearer sk-ant-oat01-test-token"
+        assert "anthropic-dangerous-direct-browser-access" in headers
+        assert "oauth-2025-04-20" in headers.get("anthropic-beta", "")
+
+    def test_litellm_oauth_beta_header_not_filtered_out(self):
+        """LiteLLM beta-header filtering should preserve the OAuth beta value."""
+        from litellm.anthropic_beta_headers_manager import (
+            filter_and_transform_beta_headers,
+        )
+
+        filtered = filter_and_transform_beta_headers(
+            ["oauth-2025-04-20"],
+            "anthropic",
+        )
+        assert "oauth-2025-04-20" in filtered
