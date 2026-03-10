@@ -141,3 +141,64 @@ def test_chat_completion_empty_api_key_config_fails_closed(monkeypatch):
 
     # Should be 401 because auth is missing
     assert response.status_code == 401
+
+
+def test_anthropic_messages_x_api_key_succeeds(monkeypatch):
+    setup_mocks(monkeypatch)
+    app = server_mod.create_app(preloaded_config=_config_with_auth())
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/messages?beta=true",
+            json={
+                "model": "m_fast",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+            headers={
+                "x-api-key": "secret-key",
+                "anthropic-version": "2023-06-01",
+            },
+        )
+
+    assert response.status_code == 200
+
+
+def test_anthropic_messages_missing_auth_fails(monkeypatch):
+    setup_mocks(monkeypatch)
+    app = server_mod.create_app(preloaded_config=_config_with_auth())
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/messages?beta=true",
+            json={
+                "model": "m_fast",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+            headers={"anthropic-version": "2023-06-01"},
+        )
+
+    assert response.status_code == 401
+
+
+def test_anthropic_messages_invalid_x_api_key_fails(monkeypatch):
+    setup_mocks(monkeypatch)
+    app = server_mod.create_app(preloaded_config=_config_with_auth())
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/messages?beta=true",
+            json={
+                "model": "m_fast",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+            headers={
+                "x-api-key": "wrong-key",
+                "anthropic-version": "2023-06-01",
+            },
+        )
+
+    assert response.status_code == 401
+    assert "Invalid API Key" in response.json()["detail"]

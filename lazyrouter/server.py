@@ -1,5 +1,6 @@
 """FastAPI server with OpenAI-compatible endpoints"""
 
+import hashlib
 import json
 import logging
 import os
@@ -85,27 +86,80 @@ security = HTTPBearer(auto_error=False)
 admin_security = HTTPBasic(auto_error=False)
 
 
+def _auth_header_presence(request: Request) -> Dict[str, Any]:
+    return {
+        "path": request.url.path,
+        "query": request.url.query,
+        "has_authorization": "authorization" in request.headers,
+        "has_x_api_key": "x-api-key" in request.headers,
+        "has_api_key": "api-key" in request.headers,
+        "has_anthropic_version": "anthropic-version" in request.headers,
+        "user_agent": request.headers.get("user-agent", ""),
+    }
+
+
+def _key_fingerprint(value: str | None) -> str:
+    if not value:
+        return "missing"
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+    return f"len={len(value)} sha256={digest}"
+
+
 def verify_api_key(
+    request: Request,
     auth: HTTPAuthorizationCredentials | None = Depends(security),
 ) -> None:
-    """Verify API key from Bearer token."""
+    """Verify API key from Bearer token or API-key headers."""
     # If no API key is configured (None), allow all requests.
     # Empty string is treated as configured but invalid (fail closed).
     if config is None or config.serve.api_key is None:
         return
 
-    if not auth:
+    presented_key = None
+    auth_source = None
+    if auth:
+        presented_key = auth.credentials
+        auth_source = "authorization"
+    if presented_key is None:
+        presented_key = request.headers.get("x-api-key")
+        if presented_key is not None:
+            auth_source = "x-api-key"
+    if presented_key is None:
+        presented_key = request.headers.get("api-key")
+        if presented_key is not None:
+            auth_source = "api-key"
+
+    if not presented_key:
+        logger.warning(
+            "Auth rejected: missing API key | %s",
+            _auth_header_presence(request),
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing API Key",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    if not secrets.compare_digest(auth.credentials, config.serve.api_key):
+    if not secrets.compare_digest(presented_key, config.serve.api_key):
+        logger.warning(
+            "Auth rejected: invalid API key from %s | expected=%s presented=%s | %s",
+            auth_source,
+            _key_fingerprint(config.serve.api_key),
+            _key_fingerprint(presented_key),
+            _auth_header_presence(request),
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API Key",
             headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            "Auth accepted from %s | presented=%s | %s",
+            auth_source,
+            _key_fingerprint(presented_key),
+            _auth_header_presence(request),
         )
 
 
