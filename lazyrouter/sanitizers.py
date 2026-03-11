@@ -7,9 +7,9 @@ requests before they are forwarded to the provider via LiteLLM.
 
 import copy
 import json
+import re
 from typing import Any, Dict, List
 
-from .constants import BRACKET_MESSAGE_ID_RE, MESSAGE_ID_RE
 from .message_utils import INSTRUCTION_ROLES, content_to_text
 
 # ---------------------------------------------------------------------------
@@ -22,6 +22,11 @@ GEMINI_MESSAGE_DROP_FIELDS = {
     "thinking_content",
     "thinking_blocks",
 }
+MESSAGE_ID_RE = re.compile(r'("message_id"\s*:\s*)"[^"]*"')
+BRACKET_MESSAGE_ID_RE = re.compile(
+    r"(\[message_id:\s*)[^\]\r\n]+(\])",
+    re.IGNORECASE,
+)
 
 
 def stabilize_prompt_cache_text(value: Any) -> Any:

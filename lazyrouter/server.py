@@ -1,12 +1,14 @@
 """FastAPI server with OpenAI-compatible endpoints"""
 
 import json
+import secrets
 import logging
 import time
 from typing import Any, Dict
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .config import Config, load_config
 from .exchange_logger import log_exchange
@@ -44,6 +46,34 @@ ROUTING_REASON_LOG_PREVIEW_CHARS = 140
 config: Config = None
 router: LLMRouter = None
 health_checker: HealthChecker = None
+
+
+
+security = HTTPBearer(auto_error=False)
+
+
+def verify_api_key(
+    auth: HTTPAuthorizationCredentials | None = Depends(security),
+) -> None:
+    """Verify API key from Bearer token."""
+    # If no API key is configured (None), allow all requests.
+    # Empty string is treated as configured but invalid (fail closed).
+    if config is None or config.serve.api_key is None:
+        return
+
+    if not auth:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing API Key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if not secrets.compare_digest(auth.credentials, config.serve.api_key):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API Key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 def _configure_logging(debug: bool) -> None:
@@ -151,6 +181,8 @@ async def _logged_stream(
             meta["router_skip_reason"] = ctx.router_skipped_reason
         if ctx.routing_result and ctx.routing_result.reasoning:
             meta["routing_reasoning"] = ctx.routing_result.reasoning
+        if ctx.routing_response:
+            meta["routing_response"] = ctx.routing_response
         return meta
 
     async def _close_stream_if_possible(stream_obj: Any) -> None:
@@ -283,7 +315,7 @@ async def _logged_stream(
         logger.info(f"[tool-calls] {sorted(streamed_tool_names)}")
 
     latency_ms = (time.monotonic() - start_time) * 1000 if start_time else 0.0
-    await log_exchange(
+    log_exchange(
         "server",
         request_id,
         ctx.request.model_dump(exclude_none=True),
@@ -339,6 +371,7 @@ def _assemble_non_streaming_response(
         "routing_reasoning": ctx.routing_result.reasoning
         if ctx.routing_result
         else None,
+        "routing_response": ctx.routing_response,
     }
     return response
 
@@ -448,7 +481,7 @@ def create_app(
         """Return current health-check state and latest per-model benchmark results."""
         return _build_health_status_response()
 
-    @app.post("/v1/chat/completions")
+    @app.post("/v1/chat/completions", dependencies=[Depends(verify_api_key)])
     async def chat_completions(request: ChatCompletionRequest):
         """Chat completions endpoint (OpenAI-compatible)
 
@@ -506,7 +539,7 @@ def create_app(
                 result = _assemble_non_streaming_response(
                     ctx, response, show_model_prefix
                 )
-                await log_exchange(
+                log_exchange(
                     "server",
                     result.get("id", "unknown"),
                     request.model_dump(exclude_none=True),

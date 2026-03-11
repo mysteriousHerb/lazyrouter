@@ -4,9 +4,13 @@ import logging
 from typing import List, Optional
 
 from .config import ModelConfig
-from .constants import MAX_FALLBACK_MODELS
 
 logger = logging.getLogger(__name__)
+
+# Hardcoded defaults - no need for user configuration
+INITIAL_RETRY_DELAY = 10.0  # seconds
+RETRY_MULTIPLIER = 2.0
+MAX_FALLBACK_MODELS = 3  # try up to 3 models before giving up
 
 
 def is_retryable_error(error: Exception) -> bool:

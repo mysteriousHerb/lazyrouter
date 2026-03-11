@@ -338,8 +338,8 @@ async def test_cache_aware_routing_ignores_removed_cached_model(mock_config):
 
 
 @pytest.mark.asyncio
-async def test_cache_tracker_is_refreshed_on_hot_cache_hit(mock_config):
-    """Test cache timestamp is refreshed on hot-cache hit for same selected model."""
+async def test_cache_tracker_not_refreshed_on_hot_cache_hit(mock_config):
+    """Test cache timestamp is not refreshed on hot-cache hit for same selected model."""
     request = ChatCompletionRequest(
         model="auto",
         messages=[Message(role="user", content="Follow-up")],
@@ -370,8 +370,7 @@ async def test_cache_tracker_is_refreshed_on_hot_cache_hit(mock_config):
         await select_model(ctx, health_checker, router)
         updated_timestamp = _cache_timestamps[ctx.session_key][1]
 
-    assert updated_timestamp > initial_timestamp
-    assert updated_timestamp == 1020.0
+    assert updated_timestamp == initial_timestamp
 
 
 @pytest.mark.asyncio

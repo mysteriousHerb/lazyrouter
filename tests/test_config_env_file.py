@@ -118,29 +118,19 @@ def test_load_config_rejects_missing_router_fallback_provider(tmp_path):
         load_config(str(config_file))
 
 
-@pytest.mark.parametrize(
-    "removed_field",
-    [
-        "cache_estimated_minutes_per_message",
-        "cache_create_input_multiplier",
-        "cache_hit_input_multiplier",
-    ],
-)
-def test_load_config_rejects_removed_cache_estimation_fields(
-    tmp_path, removed_field: str
-):
-    """Removed router cache-estimation fields should fail fast."""
+def test_load_config_rejects_zero_cache_create_input_multiplier(tmp_path):
+    """cache_create_input_multiplier must be strictly positive."""
     config_file = tmp_path / "config.yaml"
     config_file.write_text(
         textwrap.dedent(
-            f"""
+            """
             serve:
               host: "0.0.0.0"
               port: 8000
             router:
               provider: "openai"
               model: "fast"
-              {removed_field}: 0
+              cache_create_input_multiplier: 0
             providers:
               openai:
                 api_key: "abc"
@@ -155,5 +145,5 @@ def test_load_config_rejects_removed_cache_estimation_fields(
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="Removed router config field"):
+    with pytest.raises(ValueError, match="cache_create_input_multiplier"):
         load_config(str(config_file))

@@ -4,9 +4,10 @@ Each step takes a RequestContext and mutates it in place.
 Infrastructure dependencies (health_checker, router) are explicit parameters.
 """
 
+from __future__ import annotations
+
 import asyncio
 import dataclasses
-import functools
 import logging
 import re
 import time
@@ -27,14 +28,10 @@ from .message_utils import (
     content_to_text,
     tool_call_name_by_id,
 )
-from .constants import (
-    ANTHROPIC_DUMMY_USER_MESSAGE,
-    INITIAL_RETRY_DELAY,
-    PASSTHROUGH_EXCLUDE,
-    RETRY_MULTIPLIER,
-)
 from .model_normalization import normalize_requested_model
 from .retry_handler import (
+    INITIAL_RETRY_DELAY,
+    RETRY_MULTIPLIER,
     is_retryable_error,
     select_fallback_models,
 )
@@ -55,6 +52,23 @@ if TYPE_CHECKING:
     from .models import ChatCompletionRequest
 
 logger = logging.getLogger(__name__)
+_ANTHROPIC_DUMMY_USER_MESSAGE = {"role": "user", "content": "Please continue."}
+
+_PASSTHROUGH_EXCLUDE = {
+    "model",
+    "messages",
+    "temperature",
+    "max_tokens",
+    "max_completion_tokens",
+    "stream",
+    "top_p",
+    "n",
+    "stop",
+    "tools",
+    "tool_choice",
+    "stream_options",
+    "store",
+}
 
 
 @dataclasses.dataclass
@@ -133,6 +147,10 @@ def _prepare_for_model(
         else:
             prep_extra["tools"] = tools
 
+    # Stabilize dynamic system-prompt message IDs so exact-prefix prompt caches
+    # can survive across repeated turns on providers that support them.
+    prep_messages = stabilize_system_messages_for_caching(prep_messages)
+
     # For Anthropic: ensure at least one non-system message for LiteLLM/Anthropic
     # compatibility.
     if api_style == "anthropic":
@@ -141,7 +159,7 @@ def _prepare_for_model(
             for msg in prep_messages
         )
         if not has_non_system:
-            prep_messages = [*prep_messages, dict(ANTHROPIC_DUMMY_USER_MESSAGE)]
+            prep_messages = [*prep_messages, dict(_ANTHROPIC_DUMMY_USER_MESSAGE)]
 
     if request.tool_choice is not None:
         prep_extra["tool_choice"] = request.tool_choice
@@ -154,21 +172,25 @@ def _prepare_for_model(
 # ---------------------------------------------------------------------------
 
 
-@functools.lru_cache(maxsize=1)
-def _build_prefix_re(known_models: tuple) -> re.Pattern:
+def _build_prefix_re(known_models: set) -> re.Pattern:
     """Build a regex that matches only known model name prefixes like [model-name] ."""
     escaped = sorted((re.escape(m) for m in known_models), key=len, reverse=True)
-    return re.compile(r"^(?:\[(?:" + "|".join(escaped) + r")\] )+")
+    return re.compile(r"^\[(?:" + "|".join(escaped) + r")\] ")
 
 
 def _strip_model_prefixes_from_history(messages: list, known_models: set) -> list:
     """Remove [model-name] prefixes from assistant messages before sending upstream."""
     if not known_models:
         return messages
-    prefix_re = _build_prefix_re(tuple(sorted(known_models)))
+    prefix_re = _build_prefix_re(known_models)
 
     def _strip_prefixes(text: str) -> str:
-        return prefix_re.sub("", text)
+        stripped = text
+        while True:
+            updated = prefix_re.sub("", stripped)
+            if updated == stripped:
+                return stripped
+            stripped = updated
 
     result = []
     for msg in messages:
@@ -413,13 +435,15 @@ def _update_cache_tracker_for_selection(ctx: RequestContext) -> None:
         cache_tracker_set(ctx.session_key, ctx.selected_model)
         return
 
-    existing_model, _ = existing_entry
+    existing_model, age_seconds = existing_entry
+    buffer_seconds = ctx.config.router.cache_buffer_seconds
     if existing_model != ctx.selected_model:
         cache_tracker_set(ctx.session_key, ctx.selected_model)
         return
 
-    # Refresh the cache tracker on every hit because prompt cache TTL resets on read.
-    cache_tracker_set(ctx.session_key, ctx.selected_model)
+    # Refresh only when the existing entry has expired; keep hot-cache age stable on hits.
+    if not is_cache_hot(age_seconds, model_config.cache_ttl, buffer_seconds):
+        cache_tracker_set(ctx.session_key, ctx.selected_model)
 
 
 async def select_model(ctx: RequestContext, health_checker: Any, router: Any) -> None:
@@ -563,7 +587,7 @@ def prepare_provider(ctx: RequestContext) -> None:
         provider_kwargs["stream_options"] = req.stream_options
 
     for key, value in (req.model_extra or {}).items():
-        if key not in PASSTHROUGH_EXCLUDE and value is not None:
+        if key not in _PASSTHROUGH_EXCLUDE and value is not None:
             provider_kwargs[key] = value
 
     ctx.provider_kwargs = provider_kwargs
