@@ -168,3 +168,156 @@ def test_gemini_message_sanitizer_uses_clean_tool_result_header_when_ids_missing
     out = sanitize_messages_for_gemini(messages)
     assert out[0]["role"] == "user"
     assert out[0]["content"] == "[tool_result]\nresult payload"
+
+
+def test_gemini_message_sanitizer_keeps_none_content_for_assistant_tool_calls():
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "read", "arguments": "{}"},
+                }
+            ],
+        }
+    ]
+
+    out = sanitize_messages_for_gemini(messages)
+
+    assert out[0]["role"] == "assistant"
+    assert out[0]["content"] is None
+    assert out[0]["tool_calls"][0]["id"] == "call_1"
+
+
+def test_gemini_message_sanitizer_drops_invalid_list_parts():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text"},
+                {"type": "text", "text": "hello"},
+                {"type": "image_url", "image_url": {"url": ""}},
+            ],
+        }
+    ]
+
+    out = sanitize_messages_for_gemini(messages)
+
+    assert out[0]["role"] == "user"
+    assert out[0]["content"] == [{"type": "text", "text": "hello"}]
+
+
+def test_gemini_message_sanitizer_normalizes_empty_user_text_to_whitespace():
+    messages = [
+        {
+            "role": "user",
+            "content": "",
+        }
+    ]
+
+    out = sanitize_messages_for_gemini(messages)
+    assert out[0]["role"] == "user"
+    assert out[0]["content"] == " "
+
+
+def test_gemini_message_sanitizer_drops_empty_text_part_for_assistant():
+    messages = [
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": ""}],
+            "tool_calls": [
+                {
+                    "id": "call_2",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "{}"},
+                }
+            ],
+        }
+    ]
+
+    out = sanitize_messages_for_gemini(messages)
+    assert out[0]["role"] == "assistant"
+    assert out[0]["content"] is None
+    assert out[0]["tool_calls"][0]["id"] == "call_2"
+
+
+def test_gemini_message_sanitizer_keeps_valid_image_parts():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "describe"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://example.com/cat.png"},
+                },
+            ],
+        }
+    ]
+
+    out = sanitize_messages_for_gemini(messages)
+
+    assert out[0]["role"] == "user"
+    assert out[0]["content"] == [
+        {"type": "text", "text": "describe"},
+        {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+    ]
+
+
+def test_gemini_message_sanitizer_normalizes_string_image_url_part():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": "https://example.com/dog.png"},
+            ],
+        }
+    ]
+
+    out = sanitize_messages_for_gemini(messages)
+
+    assert out[0]["role"] == "user"
+    assert out[0]["content"] == [
+        {"type": "image_url", "image_url": {"url": "https://example.com/dog.png"}}
+    ]
+
+
+def test_gemini_message_sanitizer_keeps_unknown_non_empty_typed_part():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_video",
+                    "video": {"url": "https://example.com/clip.mp4"},
+                }
+            ],
+        }
+    ]
+
+    out = sanitize_messages_for_gemini(messages)
+
+    assert out[0]["role"] == "user"
+    assert out[0]["content"] == [
+        {"type": "input_video", "video": {"url": "https://example.com/clip.mp4"}}
+    ]
+
+
+def test_gemini_message_sanitizer_drops_unknown_empty_typed_part():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_video"},
+                {"type": "text", "text": "fallback"},
+            ],
+        }
+    ]
+
+    out = sanitize_messages_for_gemini(messages)
+
+    assert out[0]["role"] == "user"
+    assert out[0]["content"] == [{"type": "text", "text": "fallback"}]
