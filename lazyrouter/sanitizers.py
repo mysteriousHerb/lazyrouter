@@ -53,7 +53,8 @@ def stabilize_system_messages_for_caching(
             continue
 
         msg = original
-        if original.get("role") == "system":
+        role = str(original.get("role", "")).strip().lower()
+        if role in INSTRUCTION_ROLES:
             content = original.get("content")
             stabilized_content = _stabilize_system_content(content)
             if stabilized_content is not content:

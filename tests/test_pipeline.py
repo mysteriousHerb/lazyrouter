@@ -659,6 +659,24 @@ def test_prepare_provider_openai_stabilizes_system_message_ids():
     assert sys_msg["content"] == 'sys {"message_id": "0"}\n[message_id: 0]'
 
 
+def test_prepare_provider_openai_stabilizes_developer_message_ids():
+    ctx = _ctx()
+    ctx.messages = [
+        {
+            "role": " developer ",
+            "content": 'dev {"message_id": "abc"}\n[message_id: 622]',
+        },
+        {"role": "user", "content": "hi"},
+    ]
+    ctx.selected_model = "m1"
+    ctx.model_config = ctx.config.llms["m1"]
+
+    prepare_provider(ctx)
+
+    dev_msg = next(m for m in ctx.provider_messages if m["role"] == " developer ")
+    assert dev_msg["content"] == 'dev {"message_id": "0"}\n[message_id: 0]'
+
+
 def test_select_model_skips_router_on_tool_continuation():
     """When skip_router_on_tool_results=True and tool cache has a hit, router is bypassed."""
     req = _request(
