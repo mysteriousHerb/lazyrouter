@@ -292,6 +292,34 @@ def test_prepare_provider_gemini_sanitizes_messages():
     assert ctx.provider_messages is not None
 
 
+def test_prepare_provider_gemini_stabilizes_system_message_ids():
+    cfg = Config(
+        serve=ServeConfig(),
+        router=RouterConfig(provider="p1", model="m1"),
+        providers={"p1": ProviderConfig(api_key="k", api_style="gemini")},
+        llms={
+            "m1": ModelConfig(provider="p1", model="gemini-flash", description="gemini")
+        },
+        health_check=HealthCheckConfig(enabled=False),
+    )
+    req = _request()
+    ctx = _ctx(request=req, config=cfg)
+    ctx.messages = [
+        {
+            "role": "system",
+            "content": 'prefix {"message_id": "abc"}\n[message_id: 622]',
+        },
+        {"role": "user", "content": "hi"},
+    ]
+    ctx.selected_model = "m1"
+    ctx.model_config = cfg.llms["m1"]
+
+    prepare_provider(ctx)
+
+    sys_msg = next(m for m in ctx.provider_messages if m["role"] == "system")
+    assert sys_msg["content"] == 'prefix {"message_id": "0"}\n[message_id: 0]'
+
+
 # ---------------------------------------------------------------------------
 # select_model
 # ---------------------------------------------------------------------------
@@ -461,6 +489,31 @@ def test_prepare_provider_anthropic_keeps_system_message_unchanged():
     assert sys_msg["content"] == "You are a helpful assistant."
 
 
+def test_prepare_provider_anthropic_stabilizes_system_message_ids_in_block_lists():
+    cfg = _anthropic_config()
+    req = _request()
+    ctx = _ctx(request=req, config=cfg)
+    ctx.messages = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": 'meta {"message_id": "abc"}'},
+                {"type": "text", "text": "[message_id: 622]"},
+            ],
+        },
+        {"role": "user", "content": "hi"},
+    ]
+    ctx.selected_model = "m1"
+    ctx.model_config = cfg.llms["m1"]
+
+    prepare_provider(ctx)
+
+    sys_msg = next(m for m in ctx.provider_messages if m["role"] == "system")
+    blocks = sys_msg["content"]
+    assert blocks[0]["text"] == 'meta {"message_id": "0"}'
+    assert blocks[1]["text"] == "[message_id: 0]"
+
+
 def test_prepare_provider_anthropic_does_not_add_cache_to_tools():
     cfg = _anthropic_config()
     tools = [
@@ -586,6 +639,42 @@ def test_prepare_provider_openai_no_cache_markers():
     sys_msg = next(m for m in ctx.provider_messages if m["role"] == "system")
     assert isinstance(sys_msg["content"], str)  # not converted to block format
     assert "cache_control" not in ctx.extra_kwargs["tools"][-1]
+
+
+def test_prepare_provider_openai_stabilizes_system_message_ids():
+    ctx = _ctx()
+    ctx.messages = [
+        {
+            "role": "system",
+            "content": 'sys {"message_id": "abc"}\n[message_id: 622]',
+        },
+        {"role": "user", "content": "hi"},
+    ]
+    ctx.selected_model = "m1"
+    ctx.model_config = ctx.config.llms["m1"]
+
+    prepare_provider(ctx)
+
+    sys_msg = next(m for m in ctx.provider_messages if m["role"] == "system")
+    assert sys_msg["content"] == 'sys {"message_id": "0"}\n[message_id: 0]'
+
+
+def test_prepare_provider_openai_stabilizes_developer_message_ids():
+    ctx = _ctx()
+    ctx.messages = [
+        {
+            "role": " developer ",
+            "content": 'dev {"message_id": "abc"}\n[message_id: 622]',
+        },
+        {"role": "user", "content": "hi"},
+    ]
+    ctx.selected_model = "m1"
+    ctx.model_config = ctx.config.llms["m1"]
+
+    prepare_provider(ctx)
+
+    dev_msg = next(m for m in ctx.provider_messages if m["role"] == " developer ")
+    assert dev_msg["content"] == 'dev {"message_id": "0"}\n[message_id: 0]'
 
 
 def test_select_model_skips_router_on_tool_continuation():

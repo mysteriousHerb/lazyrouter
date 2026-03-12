@@ -7,6 +7,7 @@ requests before they are forwarded to the provider via LiteLLM.
 
 import copy
 import json
+import re
 from typing import Any, Dict, List
 
 from .message_utils import INSTRUCTION_ROLES, content_to_text
@@ -21,6 +22,76 @@ GEMINI_MESSAGE_DROP_FIELDS = {
     "thinking_content",
     "thinking_blocks",
 }
+MESSAGE_ID_RE = re.compile(r'("message_id"\s*:\s*)"[^"]*"')
+BRACKET_MESSAGE_ID_RE = re.compile(
+    r"(\[message_id:\s*)[^\]\r\n]+(\])",
+    re.IGNORECASE,
+)
+
+
+def stabilize_prompt_cache_text(value: Any) -> Any:
+    """Normalize dynamic message IDs so prompt-cache prefixes stay stable."""
+    if not isinstance(value, str) or not value:
+        return value
+
+    stabilized = MESSAGE_ID_RE.sub(r'\1"0"', value)
+    stabilized = BRACKET_MESSAGE_ID_RE.sub(r"\g<1>0\g<2>", stabilized)
+    return stabilized
+
+
+def stabilize_system_messages_for_caching(
+    messages: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Stabilize dynamic system-prompt fragments without changing message shape."""
+    if not messages:
+        return messages
+
+    stabilized_messages: List[Dict[str, Any]] = []
+    for original in messages:
+        if not isinstance(original, dict):
+            stabilized_messages.append(original)
+            continue
+
+        msg = original
+        role = str(original.get("role", "")).strip().lower()
+        if role in INSTRUCTION_ROLES:
+            content = original.get("content")
+            stabilized_content = _stabilize_system_content(content)
+            if stabilized_content is not content:
+                msg = copy.deepcopy(original)
+                msg["content"] = stabilized_content
+
+        stabilized_messages.append(msg)
+
+    return stabilized_messages
+
+
+def _stabilize_system_content(content: Any) -> Any:
+    if isinstance(content, str):
+        return stabilize_prompt_cache_text(content)
+
+    if not isinstance(content, list):
+        return content
+
+    parts_copy = None
+    for idx, part in enumerate(content):
+        if not isinstance(part, dict):
+            continue
+        if part.get("type") != "text":
+            continue
+
+        part_text = part.get("text")
+        stabilized_text = stabilize_prompt_cache_text(part_text)
+        if stabilized_text == part_text:
+            continue
+
+        if parts_copy is None:
+            parts_copy = [
+                dict(item) if isinstance(item, dict) else item for item in content
+            ]
+        parts_copy[idx]["text"] = stabilized_text
+
+    return parts_copy if parts_copy is not None else content
 
 
 # ---------------------------------------------------------------------------

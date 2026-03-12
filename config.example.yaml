@@ -7,7 +7,7 @@ serve:
   port: 1234
   show_model_prefix: true  # Prepend assistant text with "[routed-model] ".
   debug: false
-  # api_key: "set-an-internal-key-if-you-want-to-protect-the-router"
+  api_key: "set-an-internal-key-if-you-want-to-protect-the-router"
   # Exchange logs always include full request metadata; message bodies can be redacted via env:
   # LAZYROUTER_LOG_MESSAGE_CONTENT=0
 
