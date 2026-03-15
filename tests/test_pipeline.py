@@ -348,7 +348,7 @@ class _FakeRouter:
     def __init__(self, returns_model):
         self._model = returns_model
 
-    async def route(self, messages, exclude_models=None):
+    async def route(self, messages, exclude_models=None, allowed_models=None):
         return _FakeRoutingResult(self._model)
 
 

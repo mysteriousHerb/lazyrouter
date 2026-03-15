@@ -271,7 +271,7 @@ def normalize_messages(ctx: RequestContext) -> None:
     tool_name_by_id = tool_call_name_by_id(messages)
     incoming_tool_results = collect_trailing_tool_results(messages)
     is_tool_continuation_turn = bool(incoming_tool_results)
-    resolved_model = normalize_requested_model(request.model, ctx.config.llms)
+    resolved_model = normalize_requested_model(request.model, ctx.config.llms, getattr(ctx.config, 'routes', {}).keys())
 
     ctx.messages = messages
     ctx.session_key = session_key
@@ -287,11 +287,17 @@ def normalize_messages(ctx: RequestContext) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _wait_for_healthy_models(ctx: RequestContext, health_checker: Any) -> bool:
+async def _wait_for_healthy_models(ctx: RequestContext, health_checker: Any, allowed_models: Optional[List[str]] = None) -> bool:
     """Backoff-poll until at least one healthy model exists. Returns False if timed out."""
-    if len(ctx.config.llms) == 0:
+    if allowed_models is not None:
+        target_models = set(allowed_models)
+    else:
+        target_models = set(ctx.config.llms.keys())
+
+    if not target_models:
         return True
-    if len(health_checker.healthy_models) > 0:
+
+    if any(m in health_checker.healthy_models for m in target_models):
         return True
 
     max_wait = min(ctx.config.health_check.interval, 60)
@@ -310,11 +316,9 @@ async def _wait_for_healthy_models(ctx: RequestContext, health_checker: Any) -> 
         )
         await asyncio.sleep(delay)
         await health_checker.run_check()
-        if len(health_checker.healthy_models) > 0:
-            logger.info(
-                "[health-check] models recovered: %s",
-                list(health_checker.healthy_models),
-            )
+        if any(m in health_checker.healthy_models for m in target_models):
+            recovered = [m for m in target_models if m in health_checker.healthy_models]
+            logger.info("[health-check] models recovered: %s", recovered)
             return True
         elapsed = time.monotonic() - start_time
         delay = min(delay * RETRY_MULTIPLIER, max_wait - elapsed)
@@ -332,6 +336,7 @@ async def _handle_cache_aware_routing(
     ctx: RequestContext,
     health_checker: Any,
     router: Any,
+    allowed_models: Optional[List[str]] = None,
 ) -> Optional[str]:
     """Try cache-aware sticky routing. Returns selected model or None."""
     cache_entry = cache_tracker_get(ctx.session_key)
@@ -341,6 +346,9 @@ async def _handle_cache_aware_routing(
     cached_model, cache_age_seconds = cache_entry
     cached_model_config = ctx.config.llms.get(cached_model)
     if not (cached_model_config and cached_model_config.cache_ttl):
+        return None
+
+    if allowed_models is not None and cached_model not in allowed_models:
         return None
 
     buffer_seconds = ctx.config.router.cache_buffer_seconds
@@ -367,7 +375,7 @@ async def _handle_cache_aware_routing(
     healthy_scores = [
         _model_elo_score(mc)
         for model_name, mc in ctx.config.llms.items()
-        if model_name not in health_checker.unhealthy_models
+        if model_name not in health_checker.unhealthy_models and (allowed_models is None or model_name in allowed_models)
     ]
     highest_healthy_score = max(healthy_scores) if healthy_scores else 0
 
@@ -386,6 +394,7 @@ async def _handle_cache_aware_routing(
     routing_result = await router.route(
         ctx.messages,
         exclude_models=health_checker.unhealthy_models or None,
+        allowed_models=allowed_models,
     )
     routed_model = routing_result.model
     routed_config = ctx.config.llms.get(routed_model)
@@ -450,9 +459,17 @@ async def select_model(ctx: RequestContext, health_checker: Any, router: Any) ->
     """Select model and populate ctx.selected_model, model_config, routing_result, etc."""
     await health_checker.note_request_and_maybe_run_cold_boot_check()
 
-    if ctx.resolved_model == "auto":
-        has_healthy = await _wait_for_healthy_models(ctx, health_checker)
-        if not has_healthy and len(ctx.config.llms) > 0:
+    is_routed = ctx.resolved_model == "auto" or ctx.resolved_model in getattr(ctx.config, "routes", {})
+    if is_routed:
+        allowed_models = None
+        if ctx.resolved_model in getattr(ctx.config, "routes", {}):
+            allowed_models = ctx.config.routes[ctx.resolved_model]
+        elif ctx.resolved_model == "auto":
+            # auto is all models by default
+            allowed_models = list(ctx.config.llms.keys())
+
+        has_healthy = await _wait_for_healthy_models(ctx, health_checker, allowed_models)
+        if not has_healthy and allowed_models and len(allowed_models) > 0:
             logger.warning(
                 "[health-check] no healthy models available after retries; rejecting auto request"
             )
@@ -461,8 +478,8 @@ async def select_model(ctx: RequestContext, health_checker: Any, router: Any) ->
         selected_model = None
 
         # Single model configured: skip routing entirely
-        if len(ctx.config.llms) == 1:
-            selected_model = next(iter(ctx.config.llms))
+        if allowed_models and len(allowed_models) == 1:
+            selected_model = allowed_models[0]
             ctx.router_skipped_reason = "single model"
             logger.info(
                 "[router-skip] only one model configured, skipping router: %s",
@@ -479,7 +496,7 @@ async def select_model(ctx: RequestContext, health_checker: Any, router: Any) ->
                     ctx.session_key, ctx.incoming_tool_results, ctx.tool_name_by_id
                 )
             )
-            if pinned_model and pinned_model in ctx.config.llms:
+            if pinned_model and pinned_model in ctx.config.llms and (allowed_models is None or pinned_model in allowed_models):
                 if pinned_model in health_checker.unhealthy_models:
                     logger.warning(
                         "[router-skip] cached model unhealthy, rerouting: %s",
@@ -492,13 +509,14 @@ async def select_model(ctx: RequestContext, health_checker: Any, router: Any) ->
 
         if selected_model is None:
             selected_model = await _handle_cache_aware_routing(
-                ctx, health_checker, router
+                ctx, health_checker, router, allowed_models
             )
 
         if selected_model is None:
             routing_result = await router.route(
                 ctx.messages,
                 exclude_models=health_checker.unhealthy_models or None,
+                allowed_models=allowed_models,
             )
             selected_model = routing_result.model
             ctx.routing_result = routing_result
