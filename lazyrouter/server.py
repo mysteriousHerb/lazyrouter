@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.security import (
     HTTPAuthorizationCredentials,
@@ -190,6 +190,15 @@ def _restart_process(launch_settings: Dict[str, Any]) -> None:
     os.execv(sys.executable, argv)
 
 
+def _verify_admin_restart_request(request: Request) -> None:
+    """Require a same-origin JS-only header for restart requests."""
+    if request.headers.get("x-lazyrouter-admin-action") != "restart":
+        raise HTTPException(
+            status_code=403,
+            detail="Restart requests must come from the admin UI.",
+        )
+
+
 def _register_config_admin_routes(
     app: FastAPI,
     *,
@@ -260,7 +269,7 @@ def _register_config_admin_routes(
         }
 
     @app.post("/admin/config/api/restart", dependencies=admin_dependencies)
-    async def restart_admin_config():
+    async def restart_admin_config(request: Request):
         if not restart_supported or launch_settings is None:
             raise HTTPException(
                 status_code=409,
@@ -269,6 +278,7 @@ def _register_config_admin_routes(
                 ),
             )
 
+        _verify_admin_restart_request(request)
         thread = threading.Timer(0.2, _restart_process, args=(launch_settings,))
         thread.daemon = True
         thread.start()
@@ -310,7 +320,7 @@ def _bootstrap_api_key_from_raw_config(config_path: str) -> str | None:
     try:
         with Path(config_path).expanduser().open("r", encoding="utf-8") as handle:
             raw_config = yaml.safe_load(handle)
-    except Exception:
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
         return None
 
     if not isinstance(raw_config, dict):
@@ -321,6 +331,9 @@ def _bootstrap_api_key_from_raw_config(config_path: str) -> str | None:
 
     api_key = serve_config.get("api_key")
     if isinstance(api_key, str) and api_key.strip():
+        resolved_api_key = os.path.expandvars(api_key.strip())
+        if resolved_api_key and resolved_api_key != api_key.strip():
+            return resolved_api_key
         return api_key.strip()
     return None
 

@@ -466,10 +466,10 @@ def render_admin_page(
       summaryBox.textContent = JSON.stringify(payload, null, 2);
     }}
 
-    async function postJson(url, body) {{
+    async function postJson(url, body, extraHeaders = {{}}) {{
       const response = await fetch(url, {{
         method: "POST",
-        headers: {{ "Content-Type": "application/json" }},
+        headers: {{ "Content-Type": "application/json", ...extraHeaders }},
         body: JSON.stringify(body ?? {{}})
       }});
       const data = await response.json().catch(() => ({{ detail: "Unexpected server response" }}));
@@ -517,7 +517,11 @@ def render_admin_page(
       setBusy(true);
       setStatus("Restart requested. Waiting for process replacement...", "");
       try {{
-        const data = await postJson("/admin/config/api/restart");
+        const data = await postJson(
+          "/admin/config/api/restart",
+          {{}},
+          {{ "X-LazyRouter-Admin-Action": "restart" }}
+        );
         setStatus(data.detail, "ok");
         renderSummary(data);
       }} catch (error) {{

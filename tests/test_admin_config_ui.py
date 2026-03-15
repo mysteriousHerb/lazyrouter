@@ -56,6 +56,16 @@ def _basic_auth_headers(password: str, username: str = "admin") -> dict[str, str
     return {"Authorization": f"Basic {token}"}
 
 
+def _restart_headers(
+    password: str | None = None,
+    username: str = "admin",
+) -> dict[str, str]:
+    headers = {"X-LazyRouter-Admin-Action": "restart"}
+    if password is not None:
+        headers.update(_basic_auth_headers(password, username=username))
+    return headers
+
+
 def test_create_runtime_app_without_config_starts_setup_mode(tmp_path):
     app = server_mod.create_runtime_app(config_path=str(tmp_path / "config.yaml"))
 
@@ -88,13 +98,15 @@ def test_create_runtime_app_with_invalid_config_starts_setup_mode(tmp_path):
 
 def test_invalid_config_setup_mode_uses_existing_api_key_for_admin_auth(tmp_path):
     config_path = tmp_path / "config.yaml"
+    env_path = tmp_path / ".env"
+    env_path.write_text("ADMIN_KEY=secret-key\n", encoding="utf-8")
     config_path.write_text(
         textwrap.dedent(
             """
             serve:
               host: "0.0.0.0"
               port: 1234
-              api_key: "secret-key"
+              api_key: "${ADMIN_KEY}"
             router:
               provider: "missing"
               model: "fast"
@@ -112,10 +124,17 @@ def test_invalid_config_setup_mode_uses_existing_api_key_for_admin_auth(tmp_path
         encoding="utf-8",
     )
 
-    app = server_mod.create_runtime_app(config_path=str(config_path))
+    app = server_mod.create_runtime_app(
+        config_path=str(config_path),
+        env_file=str(env_path),
+    )
 
     with TestClient(app) as client:
         page = client.get("/admin/config")
+        literal_page = client.get(
+            "/admin/config",
+            headers=_basic_auth_headers("${ADMIN_KEY}"),
+        )
         authed_page = client.get(
             "/admin/config",
             headers=_basic_auth_headers("secret-key"),
@@ -123,6 +142,7 @@ def test_invalid_config_setup_mode_uses_existing_api_key_for_admin_auth(tmp_path
 
     assert page.status_code == 401
     assert page.headers["www-authenticate"] == 'Basic realm="LazyRouter Admin"'
+    assert literal_page.status_code == 401
     assert authed_page.status_code == 200
 
 
@@ -225,7 +245,10 @@ def test_admin_restart_endpoint_requires_launch_settings_when_unavailable(monkey
     app = server_mod.create_app(preloaded_config=_configured_app_config())
 
     with TestClient(app) as client:
-        response = client.post("/admin/config/api/restart")
+        response = client.post(
+            "/admin/config/api/restart",
+            headers=_restart_headers(),
+        )
 
     assert response.status_code == 409
     assert "restart is unavailable" in response.json()["detail"].lower()
@@ -252,6 +275,10 @@ def test_admin_endpoints_require_auth_when_api_key_is_configured(monkeypatch):
             json={"config_text": _valid_config_text(), "env_text": "TEST_API_KEY=abc\n"},
         )
         restart = client.post("/admin/config/api/restart")
+        authed_restart_missing_header = client.post(
+            "/admin/config/api/restart",
+            headers=_basic_auth_headers("secret-key"),
+        )
         authed_page = client.get(
             "/admin/config",
             headers=_basic_auth_headers("secret-key"),
@@ -261,14 +288,39 @@ def test_admin_endpoints_require_auth_when_api_key_is_configured(monkeypatch):
             json={"config_text": _valid_config_text(), "env_text": "TEST_API_KEY=abc\n"},
             headers=_basic_auth_headers("secret-key"),
         )
+        authed_restart = client.post(
+            "/admin/config/api/restart",
+            headers=_restart_headers("secret-key"),
+        )
 
     assert page.status_code == 401
     assert page.headers["www-authenticate"] == 'Basic realm="LazyRouter Admin"'
     assert validate.status_code == 401
     assert save.status_code == 401
     assert restart.status_code == 401
+    assert authed_restart_missing_header.status_code == 409
     assert authed_page.status_code == 200
     assert authed_validate.status_code == 200
+    assert authed_restart.status_code == 409
+
+
+def test_admin_restart_endpoint_requires_ui_restart_header(tmp_path):
+    app = server_mod.create_bootstrap_app(
+        config_path=str(tmp_path / "config.yaml"),
+        launch_settings={
+            "config_path": str(tmp_path / "config.yaml"),
+            "env_file": None,
+            "host_override": None,
+            "port_override": None,
+            "reload": False,
+        },
+    )
+
+    with TestClient(app) as client:
+        response = client.post("/admin/config/api/restart")
+
+    assert response.status_code == 403
+    assert "admin ui" in response.json()["detail"].lower()
 
 
 def test_admin_restart_endpoint_returns_command_when_supported(tmp_path, monkeypatch):
@@ -300,7 +352,10 @@ def test_admin_restart_endpoint_returns_command_when_supported(tmp_path, monkeyp
     )
 
     with TestClient(app) as client:
-        response = client.post("/admin/config/api/restart")
+        response = client.post(
+            "/admin/config/api/restart",
+            headers=_restart_headers(),
+        )
 
     assert response.status_code == 200
     assert response.json()["command"] == [
