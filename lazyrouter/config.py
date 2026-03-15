@@ -3,11 +3,12 @@
 import logging
 import os
 import re
+from io import StringIO
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 import yaml
-from dotenv import find_dotenv, load_dotenv
+from dotenv import dotenv_values, find_dotenv, load_dotenv
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
@@ -214,66 +215,54 @@ class Config(BaseModel):
         return self.providers[provider].api_style
 
 
-def substitute_env_vars(value: Any) -> Any:
+def _build_env_lookup(
+    env_values: Optional[Mapping[str, Optional[str]]] = None,
+) -> Dict[str, str]:
+    """Build lookup for ${VAR} substitution with runtime env precedence."""
+    lookup: Dict[str, str] = {}
+    if env_values:
+        for key, item in env_values.items():
+            if item is not None:
+                lookup[str(key)] = str(item)
+
+    # Match load_dotenv() behavior: existing process env wins over dotenv values.
+    lookup.update(os.environ)
+    return lookup
+
+
+def substitute_env_vars(
+    value: Any, env_lookup: Optional[Mapping[str, str]] = None
+) -> Any:
     """Recursively substitute environment variables in configuration values
 
     Supports ${VAR_NAME} syntax for environment variable substitution
     """
+    lookup = env_lookup or os.environ
     if isinstance(value, str):
         # Find all ${VAR_NAME} patterns
         pattern = r"\$\{([^}]+)\}"
         matches = re.findall(pattern, value)
 
         for var_name in matches:
-            env_value = os.getenv(var_name, "")
+            env_value = lookup.get(var_name, "")
             value = value.replace(f"${{{var_name}}}", env_value)
 
         return value
     elif isinstance(value, dict):
-        return {k: substitute_env_vars(v) for k, v in value.items()}
+        return {k: substitute_env_vars(v, env_lookup=lookup) for k, v in value.items()}
     elif isinstance(value, list):
-        return [substitute_env_vars(item) for item in value]
+        return [substitute_env_vars(item, env_lookup=lookup) for item in value]
     else:
         return value
 
 
-def load_config(
-    config_path: str = "config.yaml", env_file: Optional[str] = None
-) -> Config:
-    """Load and validate configuration from YAML file
+def validate_config_data(config_data: Any) -> Config:
+    """Validate config payload after env substitution."""
+    if config_data is None:
+        raise ValueError("Configuration is empty")
+    if not isinstance(config_data, dict):
+        raise ValueError("Configuration root must be a YAML mapping/object")
 
-    Args:
-        config_path: Path to YAML configuration file
-        env_file: Optional path to dotenv file
-
-    Returns:
-        Validated Config object
-
-    Raises:
-        FileNotFoundError: If config file doesn't exist
-        ValueError: If configuration is invalid
-    """
-    # Load environment variables from env file (or default .env if present)
-    if env_file:
-        expanded_env_file = Path(env_file).expanduser()
-        if not expanded_env_file.exists():
-            raise FileNotFoundError(f"Environment file not found: {env_file}")
-        load_dotenv(dotenv_path=str(expanded_env_file))
-    else:
-        # Prefer searching from current working directory for uvx/local runs.
-        load_dotenv(dotenv_path=find_dotenv(usecwd=True))
-
-    # Load YAML file
-    if not os.path.exists(config_path):
-        raise FileNotFoundError(f"Configuration file not found: {config_path}")
-
-    with open(config_path, "r") as f:
-        raw_config = yaml.safe_load(f)
-
-    # Substitute environment variables
-    config_data = substitute_env_vars(raw_config)
-
-    # Validate and create Config object
     try:
         config = Config(**config_data)
     except Exception as e:
@@ -305,3 +294,63 @@ def load_config(
             )
 
     return config
+
+
+def load_config_text(config_text: str, env_text: str = "") -> Config:
+    """Validate config from raw YAML and dotenv text without writing files."""
+    try:
+        raw_config = yaml.safe_load(config_text)
+    except yaml.YAMLError as e:
+        raise ValueError(f"Invalid YAML: {e}") from e
+
+    env_values = dotenv_values(stream=StringIO(env_text))
+    config_data = substitute_env_vars(raw_config, env_lookup=_build_env_lookup(env_values))
+    return validate_config_data(config_data)
+
+
+def load_config(
+    config_path: str = "config.yaml", env_file: Optional[str] = None
+) -> Config:
+    """Load and validate configuration from YAML file
+
+    Args:
+        config_path: Path to YAML configuration file
+        env_file: Optional path to dotenv file
+
+    Returns:
+        Validated Config object
+
+    Raises:
+        FileNotFoundError: If config file doesn't exist
+        ValueError: If configuration is invalid
+    """
+    # Load environment variables from env file (or default .env if present)
+    if env_file:
+        expanded_env_file = Path(env_file).expanduser()
+        if not expanded_env_file.exists():
+            raise FileNotFoundError(f"Environment file not found: {env_file}")
+        load_dotenv(dotenv_path=str(expanded_env_file))
+        env_values = dotenv_values(dotenv_path=str(expanded_env_file))
+    else:
+        expanded_config_path = Path(config_path).expanduser()
+        if not expanded_config_path.is_absolute():
+            expanded_config_path = Path.cwd() / expanded_config_path
+        sibling_dotenv = expanded_config_path.parent / ".env"
+        # Prefer config-adjacent .env for uvx/editor flows, then fall back to cwd search.
+        dotenv_path = str(sibling_dotenv) if sibling_dotenv.exists() else find_dotenv(usecwd=True)
+        load_dotenv(dotenv_path=dotenv_path)
+        env_values = dotenv_values(dotenv_path=dotenv_path) if dotenv_path else {}
+
+    # Load YAML file
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Configuration file not found: {config_path}")
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        try:
+            raw_config = yaml.safe_load(f)
+        except yaml.YAMLError as e:
+            raise ValueError(f"Invalid YAML: {e}") from e
+
+    # Substitute environment variables
+    config_data = substitute_env_vars(raw_config, env_lookup=_build_env_lookup(env_values))
+    return validate_config_data(config_data)

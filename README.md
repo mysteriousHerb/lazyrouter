@@ -40,12 +40,13 @@ It also helps translate behavior across API styles (OpenAI, Gemini, and Anthropi
 ### Option 1: Run directly from GitHub (no clone needed)
 
 1. Install `uv`: <https://docs.astral.sh/uv/getting-started/installation/>
-2. Create your config file (download [config.example.yaml](https://github.com/mysteriousHerb/lazyrouter/blob/main/config.example.yaml) as a starting point). You can put the API key in the config.yaml directly without the .env
-3. Run:
+2. Run:
 
 ```bash
 uvx --from git+https://github.com/mysteriousHerb/lazyrouter.git lazyrouter --config config.yaml
 ```
+
+If `config.yaml` does not exist yet, LazyRouter now starts a setup UI instead of failing. Open the printed `/admin/config` URL, paste/edit your `config.yaml` and `.env`, save, then use the restart button to apply the config.
 
 If you want to use a specific env file path, add:
 
@@ -62,17 +63,15 @@ uvx --from git+https://github.com/mysteriousHerb/lazyrouter.git lazyrouter --con
 git clone https://github.com/mysteriousHerb/lazyrouter
 cd lazyrouter
 uv sync
-cp .env.example .env
-cp config.example.yaml config.yaml
 ```
 
-3. Edit `.env` and `config.yaml` with your API keys, providers, and models.
-4. Start the server:
+3. Start the server:
 
 ```bash
 uv run python main.py --config config.yaml
 ```
 
+4. If `config.yaml` is missing, open `http://localhost:8000/admin/config` (or the printed host/port) and paste/edit your `config.yaml` and `.env`, then save and restart from the UI.
 5. Send requests to `http://localhost:1234/v1/chat/completions`.
 
 ## Configuration
@@ -121,6 +120,15 @@ The default routing prompt now supports explicit model requests from users. You 
 - "Switch to claude-sonnet"
 
 The router will honor these explicit requests and route to the specified model.
+
+### Config Admin UI
+
+LazyRouter now exposes a browser-based config editor at `/admin/config`.
+
+- If no config file exists, LazyRouter boots into setup mode and serves the editor immediately.
+- The UI supports raw `config.yaml` and `.env` editing for a low-friction V1 workflow.
+- Validation uses the same backend parser and Pydantic config models as normal startup.
+- Saved changes are written to disk atomically and require a restart before the running router picks them up.
 
 ### Exchange Logging Controls
 
