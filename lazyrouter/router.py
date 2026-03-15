@@ -148,21 +148,13 @@ class LLMRouter:
         ) / total_turns
         return model_config.input_price * effective_multiplier
 
-    def _build_model_descriptions(
-        self,
-        exclude_models: Optional[set] = None,
-        allowed_models: Optional[List[str]] = None,
-    ) -> str:
+    def _build_model_descriptions(self, exclude_models: Optional[set] = None, allowed_models: Optional[List[str]] = None) -> str:
         """Build formatted string of model descriptions for routing prompt"""
-        allowed_models_set = set(allowed_models) if allowed_models is not None else None
         descriptions = []
         for model_name, model_config in self.config.llms.items():
             if exclude_models and model_name in exclude_models:
                 continue
-            if (
-                allowed_models_set is not None
-                and model_name not in allowed_models_set
-            ):
+            if allowed_models is not None and model_name not in allowed_models:
                 continue
             parts = [f"- {model_name}: {model_config.description}"]
             meta = []
@@ -249,23 +241,16 @@ class LLMRouter:
         Args:
             messages: List of message dicts with 'role' and 'content'
             exclude_models: Models to exclude from selection
-            allowed_models: Optional allowlist of model ids to consider for this
-                routing decision. When provided, a model must be in this set and
-                not in ``exclude_models`` to be eligible.
 
         Returns:
             RoutingResult with selected model name and raw router response
         """
         start_time = time.monotonic()
         excluded_models = exclude_models or set()
-        allowed_models_set = set(allowed_models) if allowed_models is not None else None
         available_models = [
             model_name
             for model_name in self.config.llms.keys()
-            if model_name not in excluded_models
-            and (
-                allowed_models_set is None or model_name in allowed_models_set
-            )
+            if model_name not in excluded_models and (allowed_models is None or model_name in allowed_models)
         ]
         if not available_models:
             if excluded_models:
@@ -512,8 +497,7 @@ class LLMRouter:
                 request_id="routing_error",
                 context=f"ERROR: {str(e)}\nCURRENT: {current_request}",
                 model_descriptions=self._build_model_descriptions(
-                    exclude_models=excluded_models,
-                    allowed_models=allowed_models,
+                    exclude_models=excluded_models
                 ),
                 selected_model=f"{fallback_model} (fallback due to error: {str(e)})",
                 router_response=None,

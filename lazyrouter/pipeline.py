@@ -271,9 +271,7 @@ def normalize_messages(ctx: RequestContext) -> None:
     tool_name_by_id = tool_call_name_by_id(messages)
     incoming_tool_results = collect_trailing_tool_results(messages)
     is_tool_continuation_turn = bool(incoming_tool_results)
-    resolved_model = normalize_requested_model(
-        request.model, ctx.config.llms, ctx.config.routes.keys()
-    )
+    resolved_model = normalize_requested_model(request.model, ctx.config.llms, getattr(ctx.config, 'routes', {}).keys())
 
     ctx.messages = messages
     ctx.session_key = session_key
@@ -461,21 +459,19 @@ async def select_model(ctx: RequestContext, health_checker: Any, router: Any) ->
     """Select model and populate ctx.selected_model, model_config, routing_result, etc."""
     await health_checker.note_request_and_maybe_run_cold_boot_check()
 
-    routes = ctx.config.routes
-    is_routed = ctx.resolved_model == "auto" or ctx.resolved_model in routes
+    is_routed = ctx.resolved_model == "auto" or ctx.resolved_model in getattr(ctx.config, "routes", {})
     if is_routed:
         allowed_models = None
-        if ctx.resolved_model in routes:
-            allowed_models = routes[ctx.resolved_model]
+        if ctx.resolved_model in getattr(ctx.config, "routes", {}):
+            allowed_models = ctx.config.routes[ctx.resolved_model]
         elif ctx.resolved_model == "auto":
             # auto is all models by default
             allowed_models = list(ctx.config.llms.keys())
 
         has_healthy = await _wait_for_healthy_models(ctx, health_checker, allowed_models)
-        if not has_healthy and allowed_models:
+        if not has_healthy and allowed_models and len(allowed_models) > 0:
             logger.warning(
-                "[health-check] no healthy models available after retries for routed endpoint '%s'; rejecting request",
-                ctx.resolved_model,
+                "[health-check] no healthy models available after retries; rejecting auto request"
             )
             raise HTTPException(status_code=503, detail="No healthy models available")
 

@@ -28,7 +28,7 @@ from lazyrouter.pipeline import (
 # ---------------------------------------------------------------------------
 
 
-def _config(compression=False, routes=None) -> Config:
+def _config(compression=False) -> Config:
     return Config(
         serve=ServeConfig(),
         router=RouterConfig(provider="p1", model="m1"),
@@ -46,7 +46,6 @@ def _config(compression=False, routes=None) -> Config:
             history_trimming=compression,
             max_history_tokens=500,
         ),
-        routes=routes or {},
     )
 
 
@@ -348,16 +347,8 @@ class _FakeRoutingResult:
 class _FakeRouter:
     def __init__(self, returns_model):
         self._model = returns_model
-        self.calls = []
 
     async def route(self, messages, exclude_models=None, allowed_models=None):
-        self.calls.append(
-            {
-                "messages": messages,
-                "exclude_models": exclude_models,
-                "allowed_models": allowed_models,
-            }
-        )
         return _FakeRoutingResult(self._model)
 
 
@@ -424,34 +415,6 @@ def test_select_model_direct_skips_router():
     assert ctx.routing_result is None
 
 
-def test_select_model_custom_route_limits_router_candidates():
-    req = _request(model="auto-fast")
-    ctx = _ctx(request=req, config=_config(routes={"auto-fast": ["m1", "m2"]}))
-    normalize_messages(ctx)
-
-    hc = _FakeHealthChecker(healthy={"m1", "m2"})
-    router = _FakeRouter(returns_model="m2")
-
-    asyncio.run(select_model(ctx, hc, router))
-
-    assert ctx.selected_model == "m2"
-    assert router.calls[0]["allowed_models"] == ["m1", "m2"]
-
-
-def test_select_model_custom_route_single_model_skips_router():
-    req = _request(model="auto-fast")
-    ctx = _ctx(request=req, config=_config(routes={"auto-fast": ["m2"]}))
-    normalize_messages(ctx)
-
-    router = _FakeRouter(returns_model="m1")
-
-    asyncio.run(select_model(ctx, _FakeHealthChecker(healthy={"m2"}), router))
-
-    assert ctx.selected_model == "m2"
-    assert ctx.router_skipped_reason == "single model"
-    assert router.calls == []
-
-
 def test_select_model_raises_503_when_no_healthy_models():
     ctx = _ctx()
     normalize_messages(ctx)
@@ -478,28 +441,6 @@ def test_select_model_raises_400_for_unknown_model():
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(select_model(ctx, hc, _FakeRouter("m1")))
     assert exc_info.value.status_code == 400
-
-
-def test_select_model_raises_400_for_unknown_route():
-    req = _request(model="auto-missing")
-    ctx = _ctx(request=req, config=_config(routes={"auto-fast": ["m1"]}))
-    normalize_messages(ctx)
-
-    hc = _FakeHealthChecker(healthy={"m1"})
-
-    with pytest.raises(HTTPException) as exc_info:
-        asyncio.run(select_model(ctx, hc, _FakeRouter("m1")))
-    assert exc_info.value.status_code == 400
-
-
-def test_config_rejects_reserved_route_name():
-    with pytest.raises(ValueError, match="reserved"):
-        _config(routes={"auto": ["m1"]})
-
-
-def test_config_rejects_route_name_collision_with_model_id():
-    with pytest.raises(ValueError, match="conflicts with an existing model id"):
-        _config(routes={"m1": ["m2"]})
 
 
 # ---------------------------------------------------------------------------

@@ -1,5 +1,3 @@
-"""Shared helpers for normalizing requested model identifiers."""
-
 from typing import Any, Iterable, Mapping, Optional
 
 
@@ -11,7 +9,10 @@ def normalize_requested_model(
     if not normalized:
         return normalized
 
-    available_routes = set(available_routes or [])
+    if available_routes is None:
+        available_routes = []
+
+    available_routes = set(available_routes)
 
     if normalized.lower() == "auto":
         return "auto"

@@ -453,9 +453,10 @@ def create_app(
         models = [ModelInfo(id="auto", owned_by="lazyrouter")]
 
         # Add configured routes
-        for route_name in config.routes:
-            if route_name != "auto":
-                models.append(ModelInfo(id=route_name, owned_by="lazyrouter"))
+        if getattr(config, "routes", None):
+            for route_name in config.routes.keys():
+                if route_name != "auto":
+                    models.append(ModelInfo(id=route_name, owned_by="lazyrouter"))
 
         models += [
             ModelInfo(id=model_name, owned_by="lazyrouter")

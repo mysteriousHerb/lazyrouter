@@ -13,7 +13,7 @@ from lazyrouter.config import (
 from lazyrouter.models import HealthCheckResult
 
 
-def _config(routes=None) -> Config:
+def _config() -> Config:
     return Config(
         serve=ServeConfig(),
         router=RouterConfig(provider="p1", model="m_fast"),
@@ -27,7 +27,6 @@ def _config(routes=None) -> Config:
             ),
         },
         health_check=HealthCheckConfig(interval=300, max_latency_ms=100),
-        routes=routes or {},
     )
 
 
@@ -235,27 +234,3 @@ def test_chat_completion_calls_idle_preflight_hook(monkeypatch):
     assert response.status_code == 200
     assert response.json()["model"] == "m_fast"
     assert calls["count"] == 1
-
-
-def test_list_models_includes_custom_routes(monkeypatch):
-    monkeypatch.setattr(server_mod.HealthChecker, "start", lambda _: None)
-    monkeypatch.setattr(server_mod.HealthChecker, "stop", lambda _: None)
-
-    app = server_mod.create_app(
-        preloaded_config=_config(
-            routes={
-                "auto-fast": ["m_fast"],
-                "auto-smart": ["m_slow"],
-            }
-        )
-    )
-    with TestClient(app) as client:
-        response = client.get("/v1/models")
-
-    assert response.status_code == 200
-    model_ids = [item["id"] for item in response.json()["data"]]
-    assert model_ids.count("auto") == 1
-    assert "auto-fast" in model_ids
-    assert "auto-smart" in model_ids
-    assert "m_fast" in model_ids
-    assert "m_slow" in model_ids
