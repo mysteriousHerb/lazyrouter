@@ -451,6 +451,13 @@ def create_app(
     async def list_models():
         """List available models (OpenAI-compatible)"""
         models = [ModelInfo(id="auto", owned_by="lazyrouter")]
+
+        # Add configured routes
+        if getattr(config, "routes", None):
+            for route_name in config.routes.keys():
+                if route_name != "auto":
+                    models.append(ModelInfo(id=route_name, owned_by="lazyrouter"))
+
         models += [
             ModelInfo(id=model_name, owned_by="lazyrouter")
             for model_name in config.llms.keys()

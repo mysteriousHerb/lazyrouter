@@ -1,20 +1,24 @@
 """Shared helpers for normalizing requested model identifiers."""
 
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping, Optional
 
 
 def normalize_requested_model(
-    model_name: str, available_models: Mapping[str, Any]
+    model_name: str, available_models: Mapping[str, Any], available_routes: Optional[Iterable[str]] = None
 ) -> str:
     """Normalize provider-prefixed model ids (e.g. lazyrouter/auto)."""
     normalized = (model_name or "").strip()
     if not normalized:
         return normalized
 
+    available_routes = set(available_routes or [])
+
     if normalized.lower() == "auto":
         return "auto"
 
     if normalized in available_models:
+        return normalized
+    if normalized in available_routes:
         return normalized
 
     # Accept namespaced model ids used by some OpenAI-compatible clients,
@@ -24,6 +28,8 @@ def normalize_requested_model(
         if suffix.lower() == "auto":
             return "auto"
         if suffix in available_models:
+            return suffix
+        if suffix in available_routes:
             return suffix
         # Guard against empty suffix (e.g., trailing slash)
         if not suffix:

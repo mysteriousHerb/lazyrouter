@@ -4,7 +4,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import yaml
 from dotenv import find_dotenv, load_dotenv
@@ -167,6 +167,31 @@ class Config(BaseModel):
     llms: Dict[str, ModelConfig]
     context_compression: ContextCompressionConfig = ContextCompressionConfig()
     health_check: HealthCheckConfig = HealthCheckConfig()
+    routes: Dict[str, List[str]] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_routes(self) -> "Config":
+        """Validate that all models in routes exist in llms."""
+        reserved_route_names = {"auto"}
+        for route_name, models in self.routes.items():
+            if route_name in reserved_route_names:
+                raise ValueError(
+                    f"Route '{route_name}' is reserved and cannot be used"
+                )
+            if route_name in self.llms:
+                raise ValueError(
+                    f"Route '{route_name}' conflicts with an existing model id"
+                )
+            if not models:
+                raise ValueError(
+                    f"Route '{route_name}' must contain at least one model"
+                )
+            for model_name in models:
+                if model_name not in self.llms:
+                    raise ValueError(
+                        f"Route '{route_name}' references unknown model '{model_name}'"
+                    )
+        return self
 
     def get_api_key(self, provider: str) -> str:
         """Get API key for a provider."""

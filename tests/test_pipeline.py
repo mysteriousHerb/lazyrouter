@@ -28,7 +28,7 @@ from lazyrouter.pipeline import (
 # ---------------------------------------------------------------------------
 
 
-def _config(compression=False) -> Config:
+def _config(compression=False, routes=None) -> Config:
     return Config(
         serve=ServeConfig(),
         router=RouterConfig(provider="p1", model="m1"),
@@ -46,6 +46,7 @@ def _config(compression=False) -> Config:
             history_trimming=compression,
             max_history_tokens=500,
         ),
+        routes=routes or {},
     )
 
 
@@ -348,7 +349,7 @@ class _FakeRouter:
     def __init__(self, returns_model):
         self._model = returns_model
 
-    async def route(self, messages, exclude_models=None):
+    async def route(self, messages, exclude_models=None, allowed_models=None):
         return _FakeRoutingResult(self._model)
 
 
@@ -441,6 +442,16 @@ def test_select_model_raises_400_for_unknown_model():
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(select_model(ctx, hc, _FakeRouter("m1")))
     assert exc_info.value.status_code == 400
+
+
+def test_config_rejects_reserved_route_name():
+    with pytest.raises(ValueError, match="reserved"):
+        _config(routes={"auto": ["m1"]})
+
+
+def test_config_rejects_route_name_collision_with_model_id():
+    with pytest.raises(ValueError, match="conflicts with an existing model id"):
+        _config(routes={"m1": ["m2"]})
 
 
 # ---------------------------------------------------------------------------

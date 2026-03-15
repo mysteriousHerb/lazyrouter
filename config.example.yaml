@@ -55,6 +55,18 @@ router:
 # - coding_elo: relative coding quality signal (higher is generally better)
 # - writing_elo: relative writing quality signal (higher is generally better)
 # ELO is optional for runtime, but useful for consistent routing preferences.
+
+# Define custom routing endpoints (optional).
+# The default `auto` endpoint routes to all configured models in `llms`.
+# You can define custom routes that only consider a subset of models.
+routes:
+  auto-fast:
+    - gemini-2.5-flash
+    - gpt-4o-mini
+  auto-smart:
+    - claude-sonnet-4-5
+    - claude-opus-4-6
+
 llms:
   gemini-2.5-flash:
     description: "Very fast, cheap, and capable for most conversations and tool calling."
