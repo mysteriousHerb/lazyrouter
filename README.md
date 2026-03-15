@@ -126,6 +126,7 @@ The router will honor these explicit requests and route to the specified model.
 LazyRouter now exposes a browser-based config editor at `/admin/config`.
 
 - If no config file exists, LazyRouter boots into setup mode and serves the editor immediately.
+- If `serve.api_key` is configured, the admin UI uses the browser's built-in Basic auth popup and checks that password against `serve.api_key`.
 - The UI supports raw `config.yaml` and `.env` editing for a low-friction V1 workflow.
 - Validation uses the same backend parser and Pydantic config models as normal startup.
 - Saved changes are written to disk atomically and require a restart before the running router picks them up.

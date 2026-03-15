@@ -12,7 +12,12 @@ from typing import Any, Dict
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.security import (
+    HTTPAuthorizationCredentials,
+    HTTPBasic,
+    HTTPBasicCredentials,
+    HTTPBearer,
+)
 from pydantic import BaseModel
 import yaml
 
@@ -71,6 +76,7 @@ class ConfigEditorPayload(BaseModel):
 
 
 security = HTTPBearer(auto_error=False)
+admin_security = HTTPBasic(auto_error=False)
 
 
 def _configure_logging(debug: bool) -> None:
@@ -250,6 +256,31 @@ def _register_config_admin_routes(
         }
 
 
+def _verify_admin_password(
+    credentials: HTTPBasicCredentials | None,
+    expected_api_key: str | None,
+) -> None:
+    """Verify browser-facing admin credentials using Basic auth."""
+    if expected_api_key is None:
+        return
+
+    if not credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing admin password",
+            headers={"WWW-Authenticate": 'Basic realm="LazyRouter Admin"'},
+        )
+
+    # Browsers always send username + password for Basic auth; we only care
+    # about the password so the popup works like a simple shared-secret prompt.
+    if not secrets.compare_digest(credentials.password, expected_api_key):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid admin password",
+            headers={"WWW-Authenticate": 'Basic realm="LazyRouter Admin"'},
+        )
+
+
 def _bootstrap_api_key_from_raw_config(config_path: str) -> str | None:
     """Best-effort extraction of serve.api_key for setup-mode auth."""
     try:
@@ -286,25 +317,10 @@ def create_bootstrap_app(
     )
 
     def verify_bootstrap_api_key(
-        auth: HTTPAuthorizationCredentials | None = Depends(security),  # noqa: B008
+        auth: HTTPBasicCredentials | None = Depends(admin_security),  # noqa: B008
     ) -> None:
         """Protect setup-mode admin routes when a prior config declared an API key."""
-        if bootstrap_api_key is None:
-            return
-
-        if not auth:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Missing API Key",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-
-        if not secrets.compare_digest(auth.credentials, bootstrap_api_key):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid API Key",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+        _verify_admin_password(auth, bootstrap_api_key)
 
     _register_config_admin_routes(
         app,
@@ -676,6 +692,12 @@ def create_app(
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
+    def verify_admin_api_key(
+        auth: HTTPBasicCredentials | None = Depends(admin_security),  # noqa: B008
+    ) -> None:
+        """Verify browser-facing admin credentials from Basic auth."""
+        _verify_admin_password(auth, config.serve.api_key)
+
     # Initialize router
     try:
         router = LLMRouter(config)
@@ -698,7 +720,9 @@ def create_app(
         targets=resolve_config_targets(config_path, env_file),
         bootstrap_mode=False,
         launch_settings=launch_settings,
-        admin_dependencies=[Depends(verify_api_key)] if config.serve.api_key is not None else [],
+        admin_dependencies=[Depends(verify_admin_api_key)]
+        if config.serve.api_key is not None
+        else [],
     )
 
     @app.on_event("startup")

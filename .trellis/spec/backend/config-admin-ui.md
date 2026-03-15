@@ -62,6 +62,7 @@ POST /admin/config/api/restart
 #### GET /admin/config
 
 - Always returns server-rendered HTML.
+- When `serve.api_key` is configured, the route must challenge with HTTP Basic auth so browsers show a login popup.
 - `config.yaml` contents may be preloaded into the editor.
 - Existing `.env` file contents must not be rendered into the page.
 - If no `.env` exists yet, the UI may show a starter template instead.
@@ -93,6 +94,7 @@ POST /admin/config/api/restart
 |------|----------|-----------------|
 | Invalid YAML syntax | `POST /admin/config/api/validate` | `400` with `Invalid YAML: ...` |
 | Missing required config fields | `POST /admin/config/api/validate` | `400` with `Invalid configuration: ...` |
+| `serve.api_key` configured | all `/admin/config*` routes | `401` with `WWW-Authenticate: Basic ...` until correct password is supplied |
 | Blank `env_text`, existing `.env` present | validate/save | Use on-disk `.env`, do not expose its contents |
 | Blank `env_text`, no `.env` present | save | Create empty/template-based `.env` only if needed by save path |
 | Restart requested without launch settings | `POST /admin/config/api/restart` | `409` with manual-restart guidance |

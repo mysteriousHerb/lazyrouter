@@ -1,4 +1,5 @@
 import textwrap
+from base64 import b64encode
 
 from fastapi.testclient import TestClient
 
@@ -48,6 +49,11 @@ def _configured_app_config() -> Config:
         },
         health_check=HealthCheckConfig(interval=300, max_latency_ms=100),
     )
+
+
+def _basic_auth_headers(password: str, username: str = "admin") -> dict[str, str]:
+    token = b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+    return {"Authorization": f"Basic {token}"}
 
 
 def test_create_runtime_app_without_config_starts_setup_mode(tmp_path):
@@ -112,10 +118,11 @@ def test_invalid_config_setup_mode_uses_existing_api_key_for_admin_auth(tmp_path
         page = client.get("/admin/config")
         authed_page = client.get(
             "/admin/config",
-            headers={"Authorization": "Bearer secret-key"},
+            headers=_basic_auth_headers("secret-key"),
         )
 
     assert page.status_code == 401
+    assert page.headers["www-authenticate"] == 'Basic realm="LazyRouter Admin"'
     assert authed_page.status_code == 200
 
 
@@ -247,14 +254,21 @@ def test_admin_endpoints_require_auth_when_api_key_is_configured(monkeypatch):
         restart = client.post("/admin/config/api/restart")
         authed_page = client.get(
             "/admin/config",
-            headers={"Authorization": "Bearer secret-key"},
+            headers=_basic_auth_headers("secret-key"),
+        )
+        authed_validate = client.post(
+            "/admin/config/api/validate",
+            json={"config_text": _valid_config_text(), "env_text": "TEST_API_KEY=abc\n"},
+            headers=_basic_auth_headers("secret-key"),
         )
 
     assert page.status_code == 401
+    assert page.headers["www-authenticate"] == 'Basic realm="LazyRouter Admin"'
     assert validate.status_code == 401
     assert save.status_code == 401
     assert restart.status_code == 401
     assert authed_page.status_code == 200
+    assert authed_validate.status_code == 200
 
 
 def test_admin_restart_endpoint_returns_command_when_supported(tmp_path, monkeypatch):
