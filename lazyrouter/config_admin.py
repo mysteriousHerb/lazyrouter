@@ -117,7 +117,9 @@ def _read_existing_text(path: Path) -> str:
 def get_editor_texts(targets: ConfigTargets) -> tuple[str, str]:
     """Return current config/env texts or starter templates."""
 
-    config_template = _read_repo_template("config.example.yaml") or DEFAULT_CONFIG_TEMPLATE
+    config_template = (
+        _read_repo_template("config.example.yaml") or DEFAULT_CONFIG_TEMPLATE
+    )
     env_template = _read_repo_template(".env.example") or DEFAULT_ENV_TEMPLATE
     env_text = "" if targets.env_path.exists() else env_template
     return (
@@ -139,7 +141,9 @@ def validate_editor_texts(
 ) -> Config:
     """Validate raw editor contents using the shared config contract."""
 
-    return load_config_text(config_text, env_text=get_effective_env_text(targets, env_text))
+    return load_config_text(
+        config_text, env_text=get_effective_env_text(targets, env_text)
+    )
 
 
 def _normalize_text_for_write(text: str) -> str:
@@ -164,7 +168,9 @@ def _atomic_write_text(path: Path, text: str) -> None:
     os.replace(temp_path, path)
 
 
-def save_editor_texts(targets: ConfigTargets, config_text: str, env_text: str) -> Config:
+def save_editor_texts(
+    targets: ConfigTargets, config_text: str, env_text: str
+) -> Config:
     """Validate then persist editor contents."""
 
     effective_env_text = get_effective_env_text(targets, env_text)
@@ -384,7 +390,7 @@ def render_admin_page(
       <div class="meta">
         <div class="pill"><strong>Config Path</strong><span>{html.escape(str(targets.config_path))}</span></div>
         <div class="pill"><strong>Env Path</strong><span>{html.escape(str(targets.env_path))}</span></div>
-        <div class="pill"><strong>Mode</strong><span>{'setup' if bootstrap_mode else 'persistent admin'}</span></div>
+        <div class="pill"><strong>Mode</strong><span>{"setup" if bootstrap_mode else "persistent admin"}</span></div>
         <div class="pill"><strong>Restart</strong><span>{html.escape(restart_help)}</span></div>
       </div>
     </section>
@@ -434,6 +440,19 @@ def render_admin_page(
           </div>
           <div class="panel-body">
             <pre class="status" id="summaryBox">No validation run yet.</pre>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <div>
+              <h2>Health Data</h2>
+              <p>Current up% and latency of models.</p>
+            </div>
+            <button class="secondary" id="refreshHealthBtn" style="padding: 6px 12px; font-size: 0.85rem;">Refresh</button>
+          </div>
+          <div class="panel-body">
+            <pre class="status" id="healthBox">Loading...</pre>
           </div>
         </article>
       </div>
@@ -533,7 +552,47 @@ def render_admin_page(
     validateBtn.addEventListener("click", validateConfig);
     saveBtn.addEventListener("click", saveConfig);
     restartBtn.addEventListener("click", restartServer);
-    renderSummary({json.dumps({"bootstrap_mode": bootstrap_mode, "config_path": str(targets.config_path), "env_path": str(targets.env_path)})});
+    const adminContext = {json.dumps({"bootstrap_mode": bootstrap_mode, "config_path": str(targets.config_path), "env_path": str(targets.env_path)})};
+    const bootstrap_mode = adminContext.bootstrap_mode;
+    renderSummary(adminContext);
+    async function fetchHealth() {{
+      if (bootstrap_mode) {{
+        document.getElementById("healthBox").textContent = "Setup required. Health data unavailable.";
+        return;
+      }}
+      try {{
+        const url = new URL("/admin/config/api/health", window.location.origin);
+        const response = await fetch(url.toString());
+        if (!response.ok) throw new Error("Failed to fetch health");
+        const data = await response.json();
+        if (data.status === "setup-required") {{
+          document.getElementById("healthBox").textContent = "Setup required. Health data unavailable.";
+          return;
+        }}
+        let text = `Last Check: ${{data.last_check || 'Never'}}\\n\\n`;
+        text += `Models:\\n`;
+        if (data.results && data.results.length > 0) {{
+          data.results.forEach(r => {{
+            const statusIcon = r.is_healthy ? '🟢' : '🔴';
+            const latency = r.total_ms !== null ? `${{r.total_ms}}ms` : 'N/A';
+            const errorText = r.error ? ` - ${{r.error}}` : '';
+            text += `${{statusIcon}} ${{r.model.padEnd(15)}} | ${{latency.padStart(7)}}${{errorText}}\\n`;
+          }});
+        }} else {{
+          text += "No data available.\\n";
+        }}
+        document.getElementById("healthBox").textContent = text;
+      }} catch (err) {{
+        document.getElementById("healthBox").textContent = "Error: " + err.message;
+      }}
+    }}
+
+    if (!bootstrap_mode) {{
+      fetchHealth();
+      setInterval(fetchHealth, 30000);
+    }}
+
+    document.getElementById("refreshHealthBtn").addEventListener("click", fetchHealth);
   </script>
 </body>
 </html>

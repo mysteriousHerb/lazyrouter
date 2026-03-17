@@ -108,7 +108,7 @@ async def test_router_tool_calling():
                                 json.loads(args) if isinstance(args, str) else args
                             )
                             print(f"    {i}. {func_name}({json.dumps(args_dict)})")
-                        except:
+                        except Exception:
                             print(f"    {i}. {func_name}({args})")
                     return True
                 else:

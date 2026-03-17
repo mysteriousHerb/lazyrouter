@@ -271,7 +271,9 @@ def normalize_messages(ctx: RequestContext) -> None:
     tool_name_by_id = tool_call_name_by_id(messages)
     incoming_tool_results = collect_trailing_tool_results(messages)
     is_tool_continuation_turn = bool(incoming_tool_results)
-    resolved_model = normalize_requested_model(request.model, ctx.config.llms, getattr(ctx.config, 'routes', {}).keys())
+    resolved_model = normalize_requested_model(
+        request.model, ctx.config.llms, getattr(ctx.config, "routes", {}).keys()
+    )
 
     ctx.messages = messages
     ctx.session_key = session_key
@@ -287,7 +289,9 @@ def normalize_messages(ctx: RequestContext) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _wait_for_healthy_models(ctx: RequestContext, health_checker: Any, allowed_models: Optional[List[str]] = None) -> bool:
+async def _wait_for_healthy_models(
+    ctx: RequestContext, health_checker: Any, allowed_models: Optional[List[str]] = None
+) -> bool:
     """Backoff-poll until at least one healthy model exists. Returns False if timed out."""
     if allowed_models is not None:
         target_models = set(allowed_models)
@@ -375,7 +379,8 @@ async def _handle_cache_aware_routing(
     healthy_scores = [
         _model_elo_score(mc)
         for model_name, mc in ctx.config.llms.items()
-        if model_name not in health_checker.unhealthy_models and (allowed_models is None or model_name in allowed_models)
+        if model_name not in health_checker.unhealthy_models
+        and (allowed_models is None or model_name in allowed_models)
     ]
     highest_healthy_score = max(healthy_scores) if healthy_scores else 0
 
@@ -459,7 +464,9 @@ async def select_model(ctx: RequestContext, health_checker: Any, router: Any) ->
     """Select model and populate ctx.selected_model, model_config, routing_result, etc."""
     await health_checker.note_request_and_maybe_run_cold_boot_check()
 
-    is_routed = ctx.resolved_model == "auto" or ctx.resolved_model in getattr(ctx.config, "routes", {})
+    is_routed = ctx.resolved_model == "auto" or ctx.resolved_model in getattr(
+        ctx.config, "routes", {}
+    )
     if is_routed:
         allowed_models = None
         if ctx.resolved_model in getattr(ctx.config, "routes", {}):
@@ -468,7 +475,9 @@ async def select_model(ctx: RequestContext, health_checker: Any, router: Any) ->
             # auto is all models by default
             allowed_models = list(ctx.config.llms.keys())
 
-        has_healthy = await _wait_for_healthy_models(ctx, health_checker, allowed_models)
+        has_healthy = await _wait_for_healthy_models(
+            ctx, health_checker, allowed_models
+        )
         if not has_healthy and allowed_models and len(allowed_models) > 0:
             logger.warning(
                 "[health-check] no healthy models available after retries; rejecting auto request"
@@ -496,7 +505,11 @@ async def select_model(ctx: RequestContext, health_checker: Any, router: Any) ->
                     ctx.session_key, ctx.incoming_tool_results, ctx.tool_name_by_id
                 )
             )
-            if pinned_model and pinned_model in ctx.config.llms and (allowed_models is None or pinned_model in allowed_models):
+            if (
+                pinned_model
+                and pinned_model in ctx.config.llms
+                and (allowed_models is None or pinned_model in allowed_models)
+            ):
                 if pinned_model in health_checker.unhealthy_models:
                     logger.warning(
                         "[router-skip] cached model unhealthy, rerouting: %s",
