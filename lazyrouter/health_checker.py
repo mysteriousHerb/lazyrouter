@@ -264,6 +264,11 @@ class HealthChecker:
         self.last_results: Dict[str, HealthCheckResult] = {}
         self.last_router_result: Optional[HealthCheckResult] = None
         self.last_check: Optional[str] = None
+
+        # Track history for uptime calculations (keep last 100 checks per model)
+        # Dictionary of lists. Keys are model names and 'router'.
+        self.history: Dict[str, List[HealthCheckResult]] = {}
+        self.max_history_len = 100
         self._task: Optional[asyncio.Task] = None
         self._run_lock = asyncio.Lock()
         self._activity_lock = asyncio.Lock()
@@ -310,6 +315,26 @@ class HealthChecker:
                 e,
             )
         return True
+
+    def get_uptime_stats(self, model_name: str) -> dict:
+        """Return uptime percentage and avg latency for a model."""
+        hist = self.history.get(model_name, [])
+        if not hist:
+            return {"uptime_pct": 0.0, "avg_latency_ms": 0.0, "total_checks": 0}
+
+        successes = sum(1 for r in hist if r.is_healthy)
+        uptime_pct = round((successes / len(hist)) * 100, 1)
+
+        latencies = [
+            r.total_ms for r in hist if r.is_healthy and r.total_ms is not None
+        ]
+        avg_latency_ms = round(sum(latencies) / len(latencies), 1) if latencies else 0.0
+
+        return {
+            "uptime_pct": uptime_pct,
+            "avg_latency_ms": avg_latency_ms,
+            "total_checks": len(hist),
+        }
 
     async def run_check(self) -> list[HealthCheckResult]:
         """Run a single health check against all configured models."""
@@ -557,6 +582,21 @@ class HealthChecker:
         self.last_router_result = router_result
         self.healthy_models = new_healthy
         self.last_check = datetime.now(timezone.utc).isoformat()
+
+        # Update history
+        for model_name, res in results_by_model.items():
+            if model_name not in self.history:
+                self.history[model_name] = []
+            self.history[model_name].append(res)
+            if len(self.history[model_name]) > self.max_history_len:
+                self.history[model_name].pop(0)
+
+        if router_result:
+            if "router" not in self.history:
+                self.history["router"] = []
+            self.history["router"].append(router_result)
+            if len(self.history["router"]) > self.max_history_len:
+                self.history["router"].pop(0)
         router_health = (
             "unknown"
             if self.last_router_result is None

@@ -277,12 +277,16 @@ def _register_config_admin_routes(
             return {"status": "setup-required"}
 
         results = []
+        stats = {}
         for model_name in config.llms.keys():
             result = health_checker.last_results.get(model_name)
             if result is not None:
                 results.append(result)
+            stats[model_name] = health_checker.get_uptime_stats(model_name)
+
         if health_checker.last_router_result is not None:
             results.append(health_checker.last_router_result)
+            stats["router"] = health_checker.get_uptime_stats("router")
 
         return {
             "interval": config.health_check.interval,
@@ -291,6 +295,7 @@ def _register_config_admin_routes(
             "healthy_models": sorted(health_checker.healthy_models),
             "unhealthy_models": sorted(health_checker.unhealthy_models),
             "results": [r.model_dump() for r in results],
+            "stats": stats,
         }
 
     @app.post("/admin/config/api/restart", dependencies=admin_dependencies)

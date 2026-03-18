@@ -570,13 +570,23 @@ def render_admin_page(
           return;
         }}
         let text = `Last Check: ${{data.last_check || 'Never'}}\\n\\n`;
-        text += `Models:\\n`;
         if (data.results && data.results.length > 0) {{
+          const padLength = Math.max(...data.results.map(r => r.model.length), 15);
+          text += `STATUS | MODEL${{' '.repeat(padLength - 5)}} | LATENCY | UPTIME | AVG LATENCY\\n`;
+          text += `-`.repeat(8 + padLength + 3 + 9 + 3 + 8 + 3 + 13) + `\\n`;
           data.results.forEach(r => {{
-            const statusIcon = r.is_healthy ? '🟢' : '🔴';
+            let isHealthy = r.is_healthy;
+            let statusIcon = isHealthy ? '🟢' : '🔴';
+            if (r.is_router && r.total_ms === null && !r.error) {{
+                statusIcon = '⚪';
+            }}
             const latency = r.total_ms !== null ? `${{r.total_ms}}ms` : 'N/A';
+            const statsKey = r.is_router ? 'router' : r.model;
+            const stats = data.stats && data.stats[statsKey] ? data.stats[statsKey] : null;
+            const uptime = stats && stats.total_checks > 0 ? `${{stats.uptime_pct}}%` : 'N/A';
+            const avgLat = stats && stats.total_checks > 0 ? `${{stats.avg_latency_ms}}ms` : 'N/A';
             const errorText = r.error ? ` - ${{r.error}}` : '';
-            text += `${{statusIcon}} ${{r.model.padEnd(15)}} | ${{latency.padStart(7)}}${{errorText}}\\n`;
+            text += `${{statusIcon.padEnd(6)}} | ${{r.model.padEnd(padLength)}} | ${{latency.padStart(7)}} | ${{uptime.padStart(6)}} | ${{avgLat.padStart(11)}}${{errorText}}\\n`;
           }});
         }} else {{
           text += "No data available.\\n";
