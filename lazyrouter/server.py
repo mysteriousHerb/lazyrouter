@@ -210,10 +210,10 @@ def _register_config_admin_routes(
     """Register browser-based config editing routes."""
 
     admin_dependencies = admin_dependencies or []
-    restart_supported = bool(launch_settings) and not bool(launch_settings.get("reload"))
-    restart_hint = (
-        "Saves do not hot-apply. Use restart after saving to reload the server with the updated files."
+    restart_supported = bool(launch_settings) and not bool(
+        launch_settings.get("reload")
     )
+    restart_hint = "Saves do not hot-apply. Use restart after saving to reload the server with the updated files."
 
     @app.get(
         "/admin/config",
@@ -236,7 +236,9 @@ def _register_config_admin_routes(
     @app.post("/admin/config/api/validate", dependencies=admin_dependencies)
     async def validate_admin_config(payload: ConfigEditorPayload):
         try:
-            config = validate_editor_texts(targets, payload.config_text, payload.env_text)
+            config = validate_editor_texts(
+                targets, payload.config_text, payload.env_text
+            )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -266,6 +268,34 @@ def _register_config_admin_routes(
             "config_path": str(targets.config_path),
             "env_path": str(targets.env_path),
             "env_updated": bool(payload.env_text.strip()) or not env_existed_before,
+        }
+
+    @app.get("/admin/config/api/health", dependencies=admin_dependencies)
+    async def admin_health_status():
+        global config, health_checker
+        if bootstrap_mode or not health_checker or not config:
+            return {"status": "setup-required"}
+
+        results = []
+        stats = {}
+        for model_name in config.llms.keys():
+            result = health_checker.last_results.get(model_name)
+            if result is not None:
+                results.append(result)
+            stats[model_name] = health_checker.get_uptime_stats(model_name)
+
+        if health_checker.last_router_result is not None:
+            results.append(health_checker.last_router_result)
+            stats["router"] = health_checker.get_uptime_stats("router")
+
+        return {
+            "interval": config.health_check.interval,
+            "max_latency_ms": config.health_check.max_latency_ms,
+            "last_check": health_checker.last_check,
+            "healthy_models": sorted(health_checker.healthy_models),
+            "unhealthy_models": sorted(health_checker.unhealthy_models),
+            "results": [r.model_dump() for r in results],
+            "stats": stats,
         }
 
     @app.post("/admin/config/api/restart", dependencies=admin_dependencies)
@@ -716,6 +746,7 @@ def create_app(
     ) -> None:
         """Verify browser-facing admin credentials from Basic auth."""
         _verify_admin_password(auth, config.serve.api_key)
+
     # Initialize router
     try:
         router = LLMRouter(config)

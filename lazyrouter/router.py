@@ -148,7 +148,11 @@ class LLMRouter:
         ) / total_turns
         return model_config.input_price * effective_multiplier
 
-    def _build_model_descriptions(self, exclude_models: Optional[set] = None, allowed_models: Optional[List[str]] = None) -> str:
+    def _build_model_descriptions(
+        self,
+        exclude_models: Optional[set] = None,
+        allowed_models: Optional[List[str]] = None,
+    ) -> str:
         """Build formatted string of model descriptions for routing prompt"""
         descriptions = []
         for model_name, model_config in self.config.llms.items():
@@ -234,7 +238,10 @@ class LLMRouter:
         return status_code == 422 or "422" in str(error)
 
     async def route(
-        self, messages: List[Dict[str, str]], exclude_models: Optional[set] = None, allowed_models: Optional[List[str]] = None
+        self,
+        messages: List[Dict[str, str]],
+        exclude_models: Optional[set] = None,
+        allowed_models: Optional[List[str]] = None,
     ) -> RoutingResult:
         """Route the request to the most appropriate model.
 
@@ -250,7 +257,8 @@ class LLMRouter:
         available_models = [
             model_name
             for model_name in self.config.llms.keys()
-            if model_name not in excluded_models and (allowed_models is None or model_name in allowed_models)
+            if model_name not in excluded_models
+            and (allowed_models is None or model_name in allowed_models)
         ]
         if not available_models:
             if excluded_models:
@@ -328,8 +336,7 @@ class LLMRouter:
 
         # Build routing prompt with separated current request and context
         model_descriptions = self._build_model_descriptions(
-            exclude_models=excluded_models,
-            allowed_models=allowed_models
+            exclude_models=excluded_models, allowed_models=allowed_models
         )
 
         # Use custom prompt from config if provided, otherwise use default

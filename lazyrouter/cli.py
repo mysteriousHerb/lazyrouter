@@ -100,7 +100,9 @@ def main():
         print("\nSetup UI:")
         print(f"  - Config Admin: http://{host}:{port}/admin/config")
         print(f"  - Health: http://{host}:{port}/health")
-        print("\nSave your config in the browser, then restart to enter normal routing mode.")
+        print(
+            "\nSave your config in the browser, then restart to enter normal routing mode."
+        )
     else:
         print(f"Starting LazyRouter server on {host}:{port}")
         print(f"Router model: {config.router.model}")

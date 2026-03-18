@@ -4,7 +4,9 @@ from typing import Any, Iterable, Mapping, Optional
 
 
 def normalize_requested_model(
-    model_name: str, available_models: Mapping[str, Any], available_routes: Optional[Iterable[str]] = None
+    model_name: str,
+    available_models: Mapping[str, Any],
+    available_routes: Optional[Iterable[str]] = None,
 ) -> str:
     """Normalize provider-prefixed model ids (e.g. lazyrouter/auto)."""
     normalized = (model_name or "").strip()

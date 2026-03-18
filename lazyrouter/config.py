@@ -182,9 +182,7 @@ class Config(BaseModel):
         reserved_route_names = {"auto"}
         for route_name, models in self.routes.items():
             if route_name in reserved_route_names:
-                raise ValueError(
-                    f"Route '{route_name}' is reserved and cannot be used"
-                )
+                raise ValueError(f"Route '{route_name}' is reserved and cannot be used")
             if route_name in self.llms:
                 raise ValueError(
                     f"Route '{route_name}' conflicts with an existing model id"
@@ -315,7 +313,9 @@ def load_config_text(config_text: str, env_text: str = "") -> Config:
         raise ValueError(f"Invalid YAML: {e}") from e
 
     env_values = dotenv_values(stream=StringIO(env_text))
-    config_data = substitute_env_vars(raw_config, env_lookup=_build_env_lookup(env_values))
+    config_data = substitute_env_vars(
+        raw_config, env_lookup=_build_env_lookup(env_values)
+    )
     return validate_config_data(config_data)
 
 
@@ -349,7 +349,9 @@ def load_config(
     else:
         sibling_dotenv = expanded_config_path.parent / ".env"
         # Prefer config-adjacent .env for uvx/editor flows, then fall back to cwd search.
-        dotenv_path = str(sibling_dotenv) if sibling_dotenv.exists() else find_dotenv(usecwd=True)
+        dotenv_path = (
+            str(sibling_dotenv) if sibling_dotenv.exists() else find_dotenv(usecwd=True)
+        )
         load_dotenv(dotenv_path=dotenv_path)
         env_values = dotenv_values(dotenv_path=dotenv_path) if dotenv_path else {}
 
@@ -364,5 +366,7 @@ def load_config(
             raise ValueError(f"Invalid YAML: {e}") from e
 
     # Substitute environment variables
-    config_data = substitute_env_vars(raw_config, env_lookup=_build_env_lookup(env_values))
+    config_data = substitute_env_vars(
+        raw_config, env_lookup=_build_env_lookup(env_values)
+    )
     return validate_config_data(config_data)

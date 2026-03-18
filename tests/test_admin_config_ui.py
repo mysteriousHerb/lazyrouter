@@ -15,8 +15,9 @@ from lazyrouter.config import (
 
 
 def _valid_config_text() -> str:
-    return textwrap.dedent(
-        """
+    return (
+        textwrap.dedent(
+            """
         serve:
           host: "0.0.0.0"
           port: 1234
@@ -32,7 +33,9 @@ def _valid_config_text() -> str:
             model: "gpt-4o-mini"
             description: "Fast model"
         """
-    ).strip() + "\n"
+        ).strip()
+        + "\n"
+    )
 
 
 def _configured_app_config() -> Config:
@@ -268,11 +271,17 @@ def test_admin_endpoints_require_auth_when_api_key_is_configured(monkeypatch):
         page = client.get("/admin/config")
         validate = client.post(
             "/admin/config/api/validate",
-            json={"config_text": _valid_config_text(), "env_text": "TEST_API_KEY=abc\n"},
+            json={
+                "config_text": _valid_config_text(),
+                "env_text": "TEST_API_KEY=abc\n",
+            },
         )
         save = client.post(
             "/admin/config/api/save",
-            json={"config_text": _valid_config_text(), "env_text": "TEST_API_KEY=abc\n"},
+            json={
+                "config_text": _valid_config_text(),
+                "env_text": "TEST_API_KEY=abc\n",
+            },
         )
         restart = client.post("/admin/config/api/restart")
         authed_restart_missing_header = client.post(
@@ -285,7 +294,10 @@ def test_admin_endpoints_require_auth_when_api_key_is_configured(monkeypatch):
         )
         authed_validate = client.post(
             "/admin/config/api/validate",
-            json={"config_text": _valid_config_text(), "env_text": "TEST_API_KEY=abc\n"},
+            json={
+                "config_text": _valid_config_text(),
+                "env_text": "TEST_API_KEY=abc\n",
+            },
             headers=_basic_auth_headers("secret-key"),
         )
         authed_restart = client.post(
