@@ -21,6 +21,12 @@ from fastapi.security import (
 from pydantic import BaseModel
 import yaml
 
+from .anthropic_adapter import (
+    anthropic_to_openai_request,
+    openai_stream_to_anthropic_stream,
+    openai_to_anthropic_response,
+)
+from .anthropic_models import AnthropicRequest
 from .config import Config, load_config
 from .config_admin import (
     ConfigTargets,
@@ -887,11 +893,96 @@ def create_app(
             logger.error(f"Error processing request: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
 
-    @app.get(
-        "/v1/health-check",
-        response_model=HealthStatusResponse,
-        dependencies=[Depends(verify_api_key)],
-    )
+    @app.post("/v1/messages", dependencies=[Depends(verify_api_key)])
+    async def anthropic_messages(request: AnthropicRequest):
+        """Anthropic-compatible messages endpoint.
+
+        Accepts Anthropic /v1/messages format, routes through the same
+        pipeline, and returns Anthropic-format responses.
+        """
+        try:
+            original_model = request.model
+            openai_request = anthropic_to_openai_request(request)
+
+            ctx = RequestContext(request=openai_request, config=config)
+            normalize_messages(ctx)
+            await select_model(ctx, health_checker, router)
+            compress_context(ctx)
+            prepare_provider(ctx)
+
+            parts = [f"model={ctx.selected_model}", "api=anthropic"]
+            if openai_request.tools:
+                parts.append(f"tools: {len(openai_request.tools)}")
+            if ctx.compression_stats and ctx.compression_stats["savings_pct"] > 0:
+                parts.append(
+                    f"history: {ctx.compression_stats['original_tokens']}->{ctx.compression_stats['compressed_tokens']} ({ctx.compression_stats['savings_pct']}%)"
+                )
+            elif ctx.compression_stats:
+                parts.append(f"history: {ctx.compression_stats['compressed_tokens']}")
+            log_tag = "routing"
+            if ctx.router_skipped_reason:
+                log_tag = "routing-skip"
+                parts.append(f"skip: {ctx.router_skipped_reason}")
+            if ctx.routing_reasoning:
+                truncated = ctx.routing_reasoning[:ROUTING_REASON_LOG_PREVIEW_CHARS]
+                suffix = (
+                    "..."
+                    if len(ctx.routing_reasoning) > ROUTING_REASON_LOG_PREVIEW_CHARS
+                    else ""
+                )
+                parts.append(f"why: {truncated}{suffix}")
+            logger.info(f"[{log_tag}] {' | '.join(parts)}")
+
+            start_time = time.monotonic()
+            response = await call_with_fallback(ctx, router, health_checker)
+
+            if request.stream:
+                async def _anthropic_stream():
+                    async for event in openai_stream_to_anthropic_stream(
+                        _logged_stream(
+                            ctx,
+                            response,
+                            "",
+                            False,
+                            start_time,
+                        ),
+                        original_model,
+                    ):
+                        yield event
+
+                return StreamingResponse(
+                    _anthropic_stream(),
+                    media_type="text/event-stream",
+                )
+            else:
+                latency_ms = (time.monotonic() - start_time) * 1000
+                result = _assemble_non_streaming_response(ctx, response, False)
+                anthropic_result = openai_to_anthropic_response(
+                    result, original_model
+                )
+                log_exchange(
+                    "server-anthropic",
+                    anthropic_result.get("id", "unknown"),
+                    request.model_dump(exclude_none=True),
+                    anthropic_result,
+                    latency_ms,
+                    False,
+                    request_effective_data=_build_effective_request_for_log(ctx),
+                    extra={
+                        "selected_model": ctx.selected_model,
+                        "session_key": ctx.session_key,
+                    },
+                )
+                return anthropic_result
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error processing Anthropic request: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @app.get("/v1/health-check", response_model=HealthStatusResponse)
+>>>>>>> 1614421 (Add /v1/messages Anthropic-compatible endpoint)
     async def health_check_now():
         """Run a fresh health check, then return the same payload as /v1/health-status."""
         await health_checker.run_check()
