@@ -36,6 +36,7 @@ from .retry_handler import (
     select_fallback_models,
 )
 from .sanitizers import (
+    MESSAGE_ID_RE as _MESSAGE_ID_RE,
     sanitize_messages_for_gemini,
     stabilize_system_messages_for_caching,
     sanitize_tool_schema_for_anthropic,

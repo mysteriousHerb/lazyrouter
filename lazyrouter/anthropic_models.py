@@ -6,12 +6,16 @@ from pydantic import BaseModel, ConfigDict
 
 
 class AnthropicMessage(BaseModel):
+    """Anthropic-format chat message."""
+
     model_config = ConfigDict(extra="allow")
     role: str
     content: Union[str, List[Any]]
 
 
 class AnthropicRequest(BaseModel):
+    """Anthropic-format messages request."""
+
     model_config = ConfigDict(extra="allow")
     model: str
     messages: List[AnthropicMessage]
@@ -28,6 +32,9 @@ class AnthropicRequest(BaseModel):
 
 
 class AnthropicContentBlock(BaseModel):
+    """Content block in Anthropic response (text or tool_use)."""
+
+    model_config = ConfigDict(extra="allow")
     type: str = "text"
     text: Optional[str] = None
     id: Optional[str] = None
@@ -36,6 +43,9 @@ class AnthropicContentBlock(BaseModel):
 
 
 class AnthropicUsage(BaseModel):
+    """Token usage information for Anthropic responses."""
+
+    model_config = ConfigDict(extra="allow")
     input_tokens: int = 0
     output_tokens: int = 0
     cache_creation_input_tokens: Optional[int] = None
@@ -43,6 +53,9 @@ class AnthropicUsage(BaseModel):
 
 
 class AnthropicResponse(BaseModel):
+    """Anthropic-format messages response."""
+
+    model_config = ConfigDict(extra="allow")
     id: str
     type: str = "message"
     role: str = "assistant"

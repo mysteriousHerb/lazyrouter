@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import re
-import time
 import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional, Union
 
@@ -21,9 +20,7 @@ from .anthropic_models import (
 )
 from .models import ChatCompletionRequest, Message
 
-_BILLING_HEADER_RE = re.compile(
-    r"^x-anthropic-billing-header:[^\n]*\n?", re.MULTILINE
-)
+_BILLING_HEADER_RE = re.compile(r"^x-anthropic-billing-header:[^\n]*\n?", re.MULTILINE)
 
 
 def _strip_billing_header(text: str) -> str:
@@ -147,6 +144,7 @@ def _convert_anthropic_tool_result_to_openai(
 
 
 def anthropic_to_openai_request(req: AnthropicRequest) -> ChatCompletionRequest:
+    """Convert Anthropic /v1/messages request to OpenAI chat completions format."""
     openai_messages: list[dict[str, Any]] = []
     system_text = _system_to_string(req.system)
     if system_text:
@@ -280,6 +278,7 @@ def _openai_message_to_anthropic_content(
 def openai_to_anthropic_response(
     response: Dict[str, Any], original_model: str
 ) -> Dict[str, Any]:
+    """Convert OpenAI chat completion response to Anthropic /v1/messages format."""
     choices = response.get("choices", [])
     first_choice = choices[0] if choices else {}
     message = first_choice.get("message", {})
@@ -311,11 +310,21 @@ async def openai_stream_to_anthropic_stream(
     openai_stream: AsyncIterator[str],
     original_model: str,
 ) -> AsyncIterator[str]:
+    """Convert OpenAI streaming format to Anthropic streaming format.
+
+    This function handles:
+    - Deferring message_start until first chunk to capture lazyrouter metadata
+    - Deferring message_delta until stream ends for accurate output_tokens
+    - Detecting and propagating stream errors from the provider
+    """
     msg_id = f"msg_{uuid.uuid4().hex[:24]}"
     input_tokens = 0
     output_tokens = 0
     content_started = False
     tool_index_map: dict[int, dict] = {}
+    message_start_sent = False
+    final_stop_reason: Optional[str] = None
+    lazyrouter_meta: Optional[Dict[str, Any]] = None
 
     message_start = {
         "type": "message_start",
@@ -330,7 +339,6 @@ async def openai_stream_to_anthropic_stream(
             "usage": {"input_tokens": input_tokens, "output_tokens": 0},
         },
     }
-    yield f"event: message_start\ndata: {json.dumps(message_start)}\n\n"
 
     content_block_index = 0
 
@@ -344,6 +352,27 @@ async def openai_stream_to_anthropic_stream(
             chunk = json.loads(raw)
         except json.JSONDecodeError:
             continue
+
+        chunk_lazyrouter = chunk.get("lazyrouter", {})
+        if isinstance(chunk_lazyrouter, dict) and chunk_lazyrouter.get("stream_error"):
+            error_message = chunk_lazyrouter.get("error", "Stream error from provider")
+            error_event = {
+                "type": "error",
+                "error": {
+                    "type": "api_error",
+                    "message": error_message,
+                },
+            }
+            if not message_start_sent:
+                if lazyrouter_meta:
+                    message_start["message"]["lazyrouter"] = lazyrouter_meta
+                yield f"event: message_start\ndata: {json.dumps(message_start)}\n\n"
+                message_start_sent = True
+            yield f"event: error\ndata: {json.dumps(error_event)}\n\n"
+            return
+
+        if not message_start_sent and isinstance(chunk_lazyrouter, dict):
+            lazyrouter_meta = chunk_lazyrouter
 
         usage_chunk = chunk.get("usage", {})
         if usage_chunk:
@@ -360,6 +389,12 @@ async def openai_stream_to_anthropic_stream(
 
             delta_content = delta.get("content")
             if delta_content is not None:
+                if not message_start_sent:
+                    if lazyrouter_meta:
+                        message_start["message"]["lazyrouter"] = lazyrouter_meta
+                    yield f"event: message_start\ndata: {json.dumps(message_start)}\n\n"
+                    message_start_sent = True
+
                 if not content_started:
                     block_start = {
                         "type": "content_block_start",
@@ -378,6 +413,12 @@ async def openai_stream_to_anthropic_stream(
 
             tool_calls = delta.get("tool_calls")
             if tool_calls:
+                if not message_start_sent:
+                    if lazyrouter_meta:
+                        message_start["message"]["lazyrouter"] = lazyrouter_meta
+                    yield f"event: message_start\ndata: {json.dumps(message_start)}\n\n"
+                    message_start_sent = True
+
                 for tc in tool_calls:
                     if not isinstance(tc, dict):
                         continue
@@ -396,7 +437,7 @@ async def openai_stream_to_anthropic_stream(
                         fn = tc.get("function", {})
                         tc_name = fn.get("name", "")
                         tool_index_map[tc_index] = {
-                            "block_index": content_block_index + tc_index,
+                            "block_index": content_block_index + len(tool_index_map),
                             "id": tc_id,
                             "name": tc_name,
                         }
@@ -426,6 +467,9 @@ async def openai_stream_to_anthropic_stream(
                         yield f"event: content_block_delta\ndata: {json.dumps(block_delta)}\n\n"
 
             if finish_reason:
+                # Store stop reason but don't emit message_delta yet
+                final_stop_reason = _finish_reason_to_stop_reason(finish_reason)
+
                 if content_started and not tool_index_map:
                     block_stop = {
                         "type": "content_block_stop",
@@ -440,16 +484,11 @@ async def openai_stream_to_anthropic_stream(
                     }
                     yield f"event: content_block_stop\ndata: {json.dumps(tool_stop)}\n\n"
 
-                stop_reason = _finish_reason_to_stop_reason(finish_reason)
-                message_delta = {
-                    "type": "message_delta",
-                    "delta": {
-                        "stop_reason": stop_reason,
-                        "stop_sequence": None,
-                    },
-                    "usage": {"output_tokens": output_tokens},
-                }
-                yield f"event: message_delta\ndata: {json.dumps(message_delta)}\n\n"
+    if not message_start_sent:
+        if lazyrouter_meta:
+            message_start["message"]["lazyrouter"] = lazyrouter_meta
+        yield f"event: message_start\ndata: {json.dumps(message_start)}\n\n"
+        message_start_sent = True
 
     if not content_started and not tool_index_map:
         block_start = {
@@ -460,9 +499,15 @@ async def openai_stream_to_anthropic_stream(
         yield f"event: content_block_start\ndata: {json.dumps(block_start)}\n\n"
         block_stop = {"type": "content_block_stop", "index": 0}
         yield f"event: content_block_stop\ndata: {json.dumps(block_stop)}\n\n"
+        final_stop_reason = "end_turn"
+
+    if final_stop_reason is not None:
         message_delta = {
             "type": "message_delta",
-            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "delta": {
+                "stop_reason": final_stop_reason,
+                "stop_sequence": None,
+            },
             "usage": {"output_tokens": output_tokens},
         }
         yield f"event: message_delta\ndata: {json.dumps(message_delta)}\n\n"

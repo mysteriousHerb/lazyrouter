@@ -1,9 +1,7 @@
 """Shared LiteLLM parameter building logic"""
 
-import re
 from typing import Optional
 
-_VERSION_SUFFIX_RE = re.compile(r"/v\d+$")
 _ANTHROPIC_OAUTH_PREFIX = "sk-ant-oat"
 _ANTHROPIC_OAUTH_BETA = "oauth-2025-04-20"
 
@@ -29,7 +27,7 @@ def _patch_anthropic_oauth():
 
     1. AnthropicModelInfo.validate_environment  (chat/completions)
     2. AnthropicMessagesConfig.validate_anthropic_messages_environment
-       (messages API – the path used by litellm.acompletion for Anthropic)
+       (messages API - the path used by litellm.acompletion for Anthropic)
 
     Both are patched to replace x-api-key with Authorization: Bearer
     when the key is an OAuth token.
@@ -41,11 +39,25 @@ def _patch_anthropic_oauth():
 
     _orig_validate = AnthropicModelInfo.validate_environment
 
-    def _patched_validate(self, headers, model, messages, optional_params,
-                          litellm_params, api_key=None, api_base=None):
+    def _patched_validate(
+        self,
+        headers,
+        model,
+        messages,
+        optional_params,
+        litellm_params,
+        api_key=None,
+        api_base=None,
+    ):
         result = _orig_validate(
-            self, headers, model, messages, optional_params,
-            litellm_params, api_key=api_key, api_base=api_base,
+            self,
+            headers,
+            model,
+            messages,
+            optional_params,
+            litellm_params,
+            api_key=api_key,
+            api_base=api_base,
         )
         return _fix_oauth_headers(result)
 
@@ -58,18 +70,35 @@ def _patch_anthropic_oauth():
     except ImportError:
         return
 
-    _orig_messages_validate = AnthropicMessagesConfig.validate_anthropic_messages_environment
+    _orig_messages_validate = (
+        AnthropicMessagesConfig.validate_anthropic_messages_environment
+    )
 
-    def _patched_messages_validate(self, headers, model, messages,
-                                   optional_params, litellm_params,
-                                   api_key=None, api_base=None):
+    def _patched_messages_validate(
+        self,
+        headers,
+        model,
+        messages,
+        optional_params,
+        litellm_params,
+        api_key=None,
+        api_base=None,
+    ):
         result_headers, result_base = _orig_messages_validate(
-            self, headers, model, messages, optional_params,
-            litellm_params, api_key=api_key, api_base=api_base,
+            self,
+            headers,
+            model,
+            messages,
+            optional_params,
+            litellm_params,
+            api_key=api_key,
+            api_base=api_base,
         )
         return _fix_oauth_headers(result_headers), result_base
 
-    AnthropicMessagesConfig.validate_anthropic_messages_environment = _patched_messages_validate
+    AnthropicMessagesConfig.validate_anthropic_messages_environment = (
+        _patched_messages_validate
+    )
 
     try:
         import litellm.anthropic_beta_headers_manager as beta_headers_manager
@@ -92,7 +121,9 @@ def _patch_anthropic_oauth():
             filtered = sorted(set([*filtered, _ANTHROPIC_OAUTH_BETA]))
         return filtered
 
-    beta_headers_manager.filter_and_transform_beta_headers = _patched_filter_beta_headers
+    beta_headers_manager.filter_and_transform_beta_headers = (
+        _patched_filter_beta_headers
+    )
 
 
 _patch_anthropic_oauth()
@@ -123,16 +154,6 @@ def build_litellm_params(
                 "anthropic-dangerous-direct-browser-access": "true",
             }
 
-    elif style == "github-copilot":
-        copilot_base = (
-            base_url.rstrip("/") if base_url else "https://api.githubcopilot.com"
-        )
-        params["api_base"] = copilot_base
-        params["model"] = f"openai/{model}"
-        params["extra_headers"] = {
-            "Copilot-Integration-Id": "vscode-chat",
-            "x-initiator": "user",
-        }
     elif style == "gemini":
         if base_url:
             # LiteLLM appends /models/{model}:generateContent, so we need /v1beta

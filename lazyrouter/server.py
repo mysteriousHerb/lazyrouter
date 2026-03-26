@@ -1,6 +1,5 @@
 """FastAPI server with OpenAI-compatible endpoints"""
 
-import hashlib
 import json
 import logging
 import os
@@ -69,6 +68,34 @@ logging.getLogger("LiteLLM").propagate = False
 logger = logging.getLogger(__name__)
 ROUTING_REASON_LOG_PREVIEW_CHARS = 140
 
+
+def _log_routing_decision(ctx: "RequestContext", api_style: str = "openai") -> None:
+    parts = [f"model={ctx.selected_model}"]
+    if api_style != "openai":
+        parts.append(f"api={api_style}")
+    if ctx.request.tools:
+        parts.append(f"tools: {len(ctx.request.tools)}")
+    if ctx.compression_stats and ctx.compression_stats["savings_pct"] > 0:
+        parts.append(
+            f"history: {ctx.compression_stats['original_tokens']}->{ctx.compression_stats['compressed_tokens']} ({ctx.compression_stats['savings_pct']}%)"
+        )
+    elif ctx.compression_stats:
+        parts.append(f"history: {ctx.compression_stats['compressed_tokens']}")
+    log_tag = "routing"
+    if ctx.router_skipped_reason:
+        log_tag = "routing-skip"
+        parts.append(f"skip: {ctx.router_skipped_reason}")
+    if ctx.routing_reasoning:
+        truncated = ctx.routing_reasoning[:ROUTING_REASON_LOG_PREVIEW_CHARS]
+        suffix = (
+            "..."
+            if len(ctx.routing_reasoning) > ROUTING_REASON_LOG_PREVIEW_CHARS
+            else ""
+        )
+        parts.append(f"why: {truncated}{suffix}")
+    logger.info(f"[{log_tag}] {' | '.join(parts)}")
+
+
 # Global config and router (initialized in create_app)
 config: Config = None
 router: LLMRouter = None
@@ -89,7 +116,6 @@ admin_security = HTTPBasic(auto_error=False)
 def _auth_header_presence(request: Request) -> Dict[str, Any]:
     return {
         "path": request.url.path,
-        "query": request.url.query,
         "has_authorization": "authorization" in request.headers,
         "has_x_api_key": "x-api-key" in request.headers,
         "has_api_key": "api-key" in request.headers,
@@ -101,8 +127,7 @@ def _auth_header_presence(request: Request) -> Dict[str, Any]:
 def _key_fingerprint(value: str | None) -> str:
     if not value:
         return "missing"
-    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
-    return f"len={len(value)} sha256={digest}"
+    return "present"
 
 
 def verify_api_key(
@@ -270,10 +295,10 @@ def _register_config_admin_routes(
     """Register browser-based config editing routes."""
 
     admin_dependencies = admin_dependencies or []
-    restart_supported = bool(launch_settings) and not bool(launch_settings.get("reload"))
-    restart_hint = (
-        "Saves do not hot-apply. Use restart after saving to reload the server with the updated files."
+    restart_supported = bool(launch_settings) and not bool(
+        launch_settings.get("reload")
     )
+    restart_hint = "Saves do not hot-apply. Use restart after saving to reload the server with the updated files."
 
     @app.get(
         "/admin/config",
@@ -296,7 +321,9 @@ def _register_config_admin_routes(
     @app.post("/admin/config/api/validate", dependencies=admin_dependencies)
     async def validate_admin_config(payload: ConfigEditorPayload):
         try:
-            config = validate_editor_texts(targets, payload.config_text, payload.env_text)
+            config = validate_editor_texts(
+                targets, payload.config_text, payload.env_text
+            )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -776,6 +803,7 @@ def create_app(
     ) -> None:
         """Verify browser-facing admin credentials from Basic auth."""
         _verify_admin_password(auth, config.serve.api_key)
+
     # Initialize router
     try:
         router = LLMRouter(config)
@@ -881,29 +909,7 @@ def create_app(
             compress_context(ctx)
             prepare_provider(ctx)
 
-            # Consolidated routing summary log
-            parts = [f"model={ctx.selected_model}"]
-            if request.tools:
-                parts.append(f"tools: {len(request.tools)}")
-            if ctx.compression_stats and ctx.compression_stats["savings_pct"] > 0:
-                parts.append(
-                    f"history: {ctx.compression_stats['original_tokens']}->{ctx.compression_stats['compressed_tokens']} ({ctx.compression_stats['savings_pct']}%)"
-                )
-            elif ctx.compression_stats:
-                parts.append(f"history: {ctx.compression_stats['compressed_tokens']}")
-            log_tag = "routing"
-            if ctx.router_skipped_reason:
-                log_tag = "routing-skip"
-                parts.append(f"skip: {ctx.router_skipped_reason}")
-            if ctx.routing_reasoning:
-                truncated = ctx.routing_reasoning[:ROUTING_REASON_LOG_PREVIEW_CHARS]
-                suffix = (
-                    "..."
-                    if len(ctx.routing_reasoning) > ROUTING_REASON_LOG_PREVIEW_CHARS
-                    else ""
-                )
-                parts.append(f"why: {truncated}{suffix}")
-            logger.info(f"[{log_tag}] {' | '.join(parts)}")
+            _log_routing_decision(ctx)
 
             start_time = time.monotonic()
             response = await call_with_fallback(ctx, router, health_checker)
@@ -964,33 +970,13 @@ def create_app(
             compress_context(ctx)
             prepare_provider(ctx)
 
-            parts = [f"model={ctx.selected_model}", "api=anthropic"]
-            if openai_request.tools:
-                parts.append(f"tools: {len(openai_request.tools)}")
-            if ctx.compression_stats and ctx.compression_stats["savings_pct"] > 0:
-                parts.append(
-                    f"history: {ctx.compression_stats['original_tokens']}->{ctx.compression_stats['compressed_tokens']} ({ctx.compression_stats['savings_pct']}%)"
-                )
-            elif ctx.compression_stats:
-                parts.append(f"history: {ctx.compression_stats['compressed_tokens']}")
-            log_tag = "routing"
-            if ctx.router_skipped_reason:
-                log_tag = "routing-skip"
-                parts.append(f"skip: {ctx.router_skipped_reason}")
-            if ctx.routing_reasoning:
-                truncated = ctx.routing_reasoning[:ROUTING_REASON_LOG_PREVIEW_CHARS]
-                suffix = (
-                    "..."
-                    if len(ctx.routing_reasoning) > ROUTING_REASON_LOG_PREVIEW_CHARS
-                    else ""
-                )
-                parts.append(f"why: {truncated}{suffix}")
-            logger.info(f"[{log_tag}] {' | '.join(parts)}")
+            _log_routing_decision(ctx, api_style="anthropic")
 
             start_time = time.monotonic()
             response = await call_with_fallback(ctx, router, health_checker)
 
             if request.stream:
+
                 async def _anthropic_stream():
                     async for event in openai_stream_to_anthropic_stream(
                         _logged_stream(
@@ -1011,9 +997,7 @@ def create_app(
             else:
                 latency_ms = (time.monotonic() - start_time) * 1000
                 result = _assemble_non_streaming_response(ctx, response, False)
-                anthropic_result = openai_to_anthropic_response(
-                    result, original_model
-                )
+                anthropic_result = openai_to_anthropic_response(result, original_model)
                 log_exchange(
                     "server-anthropic",
                     anthropic_result.get("id", "unknown"),
@@ -1033,10 +1017,13 @@ def create_app(
             raise
         except Exception as e:
             logger.error(f"Error processing Anthropic request: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail=str(e)) from e
 
-    @app.get("/v1/health-check", response_model=HealthStatusResponse)
->>>>>>> 1614421 (Add /v1/messages Anthropic-compatible endpoint)
+    @app.get(
+        "/v1/health-check",
+        response_model=HealthStatusResponse,
+        dependencies=[Depends(verify_api_key)],
+    )
     async def health_check_now():
         """Run a fresh health check, then return the same payload as /v1/health-status."""
         await health_checker.run_check()

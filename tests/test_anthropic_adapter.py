@@ -43,7 +43,10 @@ class TestAnthropicToOpenaiRequest:
         req = AnthropicRequest(
             model="claude-3-5-sonnet-latest",
             messages=[AnthropicMessage(role="user", content="Hi")],
-            system=[{"type": "text", "text": "Part 1"}, {"type": "text", "text": "Part 2"}],
+            system=[
+                {"type": "text", "text": "Part 1"},
+                {"type": "text", "text": "Part 2"},
+            ],
             max_tokens=512,
         )
         result = anthropic_to_openai_request(req)
@@ -267,7 +270,11 @@ class TestOpenaiToAnthropicResponse:
                         "finish_reason": oai_reason,
                     }
                 ],
-                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                },
             }
             result = openai_to_anthropic_response(resp, "claude-3-5-sonnet-latest")
             assert result["stop_reason"] == expected
@@ -283,7 +290,10 @@ class TestOpenaiToAnthropicResponse:
                 }
             ],
             "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-            "lazyrouter": {"selected_model": "gpt-4o", "routing_reasoning": "simple query"},
+            "lazyrouter": {
+                "selected_model": "gpt-4o",
+                "routing_reasoning": "simple query",
+            },
         }
         result = openai_to_anthropic_response(resp, "claude-3-5-sonnet-latest")
         assert result["lazyrouter"]["selected_model"] == "gpt-4o"
@@ -383,32 +393,6 @@ class TestOpenaiStreamToAnthropicStream:
 
 
 class TestLitellmCopilotParams:
-    def test_github_copilot_style(self):
-        from lazyrouter.litellm_utils import build_litellm_params
-
-        params = build_litellm_params(
-            api_key="ghu_test123",
-            base_url="https://api.githubcopilot.com",
-            api_style="github-copilot",
-            model="gpt-4o",
-        )
-        assert params["api_base"] == "https://api.githubcopilot.com"
-        assert params["model"] == "openai/gpt-4o"
-        assert params["extra_headers"]["Copilot-Integration-Id"] == "vscode-chat"
-        assert params["extra_headers"]["x-initiator"] == "user"
-
-    def test_github_copilot_default_base_url(self):
-        from lazyrouter.litellm_utils import build_litellm_params
-
-        params = build_litellm_params(
-            api_key="ghu_test123",
-            base_url=None,
-            api_style="github-copilot",
-            model="claude-3.5-sonnet",
-        )
-        assert params["api_base"] == "https://api.githubcopilot.com"
-        assert params["model"] == "openai/claude-3.5-sonnet"
-
     def test_anthropic_oauth_token_sets_bearer_headers(self):
         from lazyrouter.litellm_utils import build_litellm_params
 
@@ -422,7 +406,10 @@ class TestLitellmCopilotParams:
         assert params["api_key"] == "sk-ant-oat01-test-token-value"
         assert "extra_headers" in params
         assert params["extra_headers"]["anthropic-beta"] == "oauth-2025-04-20"
-        assert params["extra_headers"]["anthropic-dangerous-direct-browser-access"] == "true"
+        assert (
+            params["extra_headers"]["anthropic-dangerous-direct-browser-access"]
+            == "true"
+        )
 
     def test_anthropic_regular_api_key_no_oauth_headers(self):
         from lazyrouter.litellm_utils import build_litellm_params
@@ -449,7 +436,10 @@ class TestLitellmCopilotParams:
         assert params["model"] == "claude-opus-4-6"
         assert params["api_key"] == "sk-ant-oat01-custom-base"
         assert params["extra_headers"]["anthropic-beta"] == "oauth-2025-04-20"
-        assert params["extra_headers"]["anthropic-dangerous-direct-browser-access"] == "true"
+        assert (
+            params["extra_headers"]["anthropic-dangerous-direct-browser-access"]
+            == "true"
+        )
 
     def test_litellm_oauth_patch_removes_xapikey(self):
         """The LiteLLM patch should replace x-api-key with Authorization: Bearer

@@ -10,6 +10,7 @@ from lazyrouter.config import (
     ServeConfig,
 )
 
+
 def _config_with_auth(api_key: str | None = "secret-key") -> Config:
     return Config(
         serve=ServeConfig(api_key=api_key),
@@ -23,6 +24,7 @@ def _config_with_auth(api_key: str | None = "secret-key") -> Config:
         health_check=HealthCheckConfig(interval=300, max_latency_ms=100),
     )
 
+
 def setup_mocks(monkeypatch):
     # Mock HealthChecker
     monkeypatch.setattr(server_mod.HealthChecker, "start", lambda _: None)
@@ -31,6 +33,7 @@ def setup_mocks(monkeypatch):
     # Mock pipeline functions to avoid logic execution
     async def _fake_select_model(*args, **kwargs):
         pass
+
     monkeypatch.setattr(server_mod, "select_model", _fake_select_model)
 
     monkeypatch.setattr(server_mod, "compress_context", lambda _: None)
@@ -50,7 +53,9 @@ def setup_mocks(monkeypatch):
                 }
             ],
         }
+
     monkeypatch.setattr(server_mod, "call_with_fallback", _fake_call_with_fallback)
+
 
 def test_chat_completion_no_auth_fails(monkeypatch):
     setup_mocks(monkeypatch)
@@ -71,6 +76,7 @@ def test_chat_completion_no_auth_fails(monkeypatch):
     # authentication is configured.
     assert response.status_code == 401
 
+
 def test_chat_completion_valid_auth_succeeds(monkeypatch):
     setup_mocks(monkeypatch)
     app = server_mod.create_app(preloaded_config=_config_with_auth())
@@ -83,10 +89,11 @@ def test_chat_completion_valid_auth_succeeds(monkeypatch):
                 "model": "m_fast",
                 "messages": [{"role": "user", "content": "hello"}],
             },
-            headers={"Authorization": "Bearer secret-key"}
+            headers={"Authorization": "Bearer secret-key"},
         )
 
     assert response.status_code == 200
+
 
 def test_chat_completion_invalid_auth_fails(monkeypatch):
     setup_mocks(monkeypatch)
@@ -100,11 +107,12 @@ def test_chat_completion_invalid_auth_fails(monkeypatch):
                 "model": "m_fast",
                 "messages": [{"role": "user", "content": "hello"}],
             },
-            headers={"Authorization": "Bearer wrong-key"}
+            headers={"Authorization": "Bearer wrong-key"},
         )
 
     assert response.status_code == 401
     assert "Invalid API Key" in response.json()["detail"]
+
 
 def test_chat_completion_no_api_key_config_allows_unauthenticated(monkeypatch):
     setup_mocks(monkeypatch)
@@ -121,6 +129,7 @@ def test_chat_completion_no_api_key_config_allows_unauthenticated(monkeypatch):
             },
         )
     assert response.status_code == 200
+
 
 def test_chat_completion_empty_api_key_config_fails_closed(monkeypatch):
     setup_mocks(monkeypatch)
@@ -149,7 +158,7 @@ def test_anthropic_messages_x_api_key_succeeds(monkeypatch):
 
     with TestClient(app) as client:
         response = client.post(
-            "/v1/messages?beta=true",
+            "/v1/messages",
             json={
                 "model": "m_fast",
                 "max_tokens": 16,
@@ -170,7 +179,7 @@ def test_anthropic_messages_missing_auth_fails(monkeypatch):
 
     with TestClient(app) as client:
         response = client.post(
-            "/v1/messages?beta=true",
+            "/v1/messages",
             json={
                 "model": "m_fast",
                 "max_tokens": 16,
@@ -188,7 +197,7 @@ def test_anthropic_messages_invalid_x_api_key_fails(monkeypatch):
 
     with TestClient(app) as client:
         response = client.post(
-            "/v1/messages?beta=true",
+            "/v1/messages",
             json={
                 "model": "m_fast",
                 "max_tokens": 16,
