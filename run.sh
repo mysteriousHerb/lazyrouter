@@ -1,10 +1,14 @@
 #!/bin/bash
-# Get the directory where the script is located and change to it
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
-cd "$SCRIPT_DIR" || { echo "Failed to cd to $SCRIPT_DIR" >&2; exit 1; }
+# Get the absolute directory where the script is located and change to it
+# This ensures we are always in the repository root before running uv
+SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+cd "$SCRIPT_DIR" || { echo "CRITICAL: Could not change to $SCRIPT_DIR" >&2; exit 1; }
 
-# Run the app with explicit config and port options
-uv run python main.py --config config.yaml --port 8000
+# Log the working directory for debugging
+echo "Starting lazyrouter in: $(pwd)"
+
+# Run the app with uv
+uv run python main.py
 
 
 # use pm2 to run this script in the background and restart it if it crashes
