@@ -36,6 +36,7 @@ from .retry_handler import (
     select_fallback_models,
 )
 from .sanitizers import (
+    MESSAGE_ID_RE as _MESSAGE_ID_RE,
     sanitize_messages_for_gemini,
     stabilize_system_messages_for_caching,
     sanitize_tool_schema_for_anthropic,
@@ -151,9 +152,68 @@ def _prepare_for_model(
     # can survive across repeated turns on providers that support them.
     prep_messages = stabilize_system_messages_for_caching(prep_messages)
 
-    # For Anthropic: ensure at least one non-system message for LiteLLM/Anthropic
-    # compatibility.
+    # For Anthropic: stabilise message_id in system prompt so it doesn't bust the cache,
+    # then ensure at least one non-system message for LiteLLM/Anthropic compatibility.
     if api_style == "anthropic":
+        new_messages = []
+        for msg in prep_messages:
+            if msg.get("role") == "system":
+                content = msg.get("content", "")
+                if isinstance(content, str) and content:
+                    stabilised = _MESSAGE_ID_RE.sub(r'\1"0"', content)
+                    if stabilised != content:
+                        msg = dict(msg)
+                        msg["content"] = stabilised
+            # Anthropic rejects tool messages with empty content.
+            elif msg.get("role") == "tool" and msg.get("content") == "":
+                msg = dict(msg)
+                msg["content"] = "(no output)"
+            new_messages.append(msg)
+        prep_messages = new_messages
+
+        # Anthropic requires strict user/assistant alternation; consecutive assistant
+        # messages cause a 400.  Merge them by combining content and tool_calls.
+        merged: list = []
+        for msg in prep_messages:
+            if (
+                merged
+                and msg.get("role") == "assistant"
+                and merged[-1].get("role") == "assistant"
+            ):
+                prev = merged[-1]
+
+                # Collect text from both messages
+                def _extract_text(m: dict) -> str:
+                    c = m.get("content")
+                    if isinstance(c, str):
+                        return c
+                    if isinstance(c, list):
+                        parts = [
+                            b.get("text", "")
+                            for b in c
+                            if isinstance(b, dict) and b.get("type") == "text"
+                        ]
+                        return "\n".join(p for p in parts if p)
+                    return ""
+
+                text_parts = [t for t in (_extract_text(prev), _extract_text(msg)) if t]
+                merged_text = "\n".join(text_parts) if text_parts else None
+                # Combine tool_calls lists
+                prev_tc = prev.get("tool_calls") or []
+                curr_tc = msg.get("tool_calls") or []
+                merged_tc = prev_tc + curr_tc
+                new_msg: dict = {"role": "assistant"}
+                if merged_text:
+                    new_msg["content"] = merged_text
+                if merged_tc:
+                    new_msg["tool_calls"] = merged_tc
+                if not merged_text and not merged_tc:
+                    new_msg["content"] = ""
+                merged[-1] = new_msg
+            else:
+                merged.append(dict(msg))
+        prep_messages = merged
+
         has_non_system = any(
             str(msg.get("role", "")).strip().lower() != "system"
             for msg in prep_messages
@@ -271,7 +331,9 @@ def normalize_messages(ctx: RequestContext) -> None:
     tool_name_by_id = tool_call_name_by_id(messages)
     incoming_tool_results = collect_trailing_tool_results(messages)
     is_tool_continuation_turn = bool(incoming_tool_results)
-    resolved_model = normalize_requested_model(request.model, ctx.config.llms, getattr(ctx.config, 'routes', {}).keys())
+    resolved_model = normalize_requested_model(
+        request.model, ctx.config.llms, getattr(ctx.config, "routes", {}).keys()
+    )
 
     ctx.messages = messages
     ctx.session_key = session_key
@@ -287,7 +349,9 @@ def normalize_messages(ctx: RequestContext) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _wait_for_healthy_models(ctx: RequestContext, health_checker: Any, allowed_models: Optional[List[str]] = None) -> bool:
+async def _wait_for_healthy_models(
+    ctx: RequestContext, health_checker: Any, allowed_models: Optional[List[str]] = None
+) -> bool:
     """Backoff-poll until at least one healthy model exists. Returns False if timed out."""
     if allowed_models is not None:
         target_models = set(allowed_models)
@@ -375,7 +439,8 @@ async def _handle_cache_aware_routing(
     healthy_scores = [
         _model_elo_score(mc)
         for model_name, mc in ctx.config.llms.items()
-        if model_name not in health_checker.unhealthy_models and (allowed_models is None or model_name in allowed_models)
+        if model_name not in health_checker.unhealthy_models
+        and (allowed_models is None or model_name in allowed_models)
     ]
     highest_healthy_score = max(healthy_scores) if healthy_scores else 0
 
@@ -459,7 +524,9 @@ async def select_model(ctx: RequestContext, health_checker: Any, router: Any) ->
     """Select model and populate ctx.selected_model, model_config, routing_result, etc."""
     await health_checker.note_request_and_maybe_run_cold_boot_check()
 
-    is_routed = ctx.resolved_model == "auto" or ctx.resolved_model in getattr(ctx.config, "routes", {})
+    is_routed = ctx.resolved_model == "auto" or ctx.resolved_model in getattr(
+        ctx.config, "routes", {}
+    )
     if is_routed:
         allowed_models = None
         if ctx.resolved_model in getattr(ctx.config, "routes", {}):
@@ -468,7 +535,9 @@ async def select_model(ctx: RequestContext, health_checker: Any, router: Any) ->
             # auto is all models by default
             allowed_models = list(ctx.config.llms.keys())
 
-        has_healthy = await _wait_for_healthy_models(ctx, health_checker, allowed_models)
+        has_healthy = await _wait_for_healthy_models(
+            ctx, health_checker, allowed_models
+        )
         if not has_healthy and allowed_models and len(allowed_models) > 0:
             logger.warning(
                 "[health-check] no healthy models available after retries; rejecting auto request"
@@ -496,7 +565,11 @@ async def select_model(ctx: RequestContext, health_checker: Any, router: Any) ->
                     ctx.session_key, ctx.incoming_tool_results, ctx.tool_name_by_id
                 )
             )
-            if pinned_model and pinned_model in ctx.config.llms and (allowed_models is None or pinned_model in allowed_models):
+            if (
+                pinned_model
+                and pinned_model in ctx.config.llms
+                and (allowed_models is None or pinned_model in allowed_models)
+            ):
                 if pinned_model in health_checker.unhealthy_models:
                     logger.warning(
                         "[router-skip] cached model unhealthy, rerouting: %s",

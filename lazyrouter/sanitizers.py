@@ -351,30 +351,38 @@ def sanitize_tool_schema_for_anthropic(
 
     anthropic_tools = []
     for tool in tools:
-        # Convert from OpenAI format to Anthropic format
         if "function" in tool:
             func = tool["function"]
+            schema = func.get("parameters", {})
+            if schema is None or not isinstance(schema, dict):
+                schema = {"type": "object"}
             anthropic_tool = {
                 "name": func.get("name", ""),
                 "description": func.get("description", ""),
-                "input_schema": _sanitize_schema(func.get("parameters", {})),
+                "input_schema": _sanitize_schema(schema, require_type=True),
             }
             anthropic_tools.append(anthropic_tool)
         else:
-            # Already in Anthropic format or unknown format, sanitize input_schema
             tool = copy.deepcopy(tool)
             if isinstance(tool.get("input_schema"), dict):
-                tool["input_schema"] = _sanitize_schema(tool["input_schema"])
+                tool["input_schema"] = _sanitize_schema(
+                    tool["input_schema"], require_type=True
+                )
+            elif "input_schema" not in tool:
+                tool["input_schema"] = {"type": "object"}
             anthropic_tools.append(tool)
 
     return anthropic_tools
 
 
-def _sanitize_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+def _sanitize_schema(
+    schema: Dict[str, Any], require_type: bool = False
+) -> Dict[str, Any]:
     """Recursively sanitize a JSON schema to be Anthropic-compatible.
 
     Args:
         schema: JSON schema dictionary
+        require_type: If True, ensure "type" is present (defaults to "object")
 
     Returns:
         Sanitized schema dictionary
@@ -406,5 +414,8 @@ def _sanitize_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
             ]
         else:
             sanitized[key] = value
+
+    if require_type and "type" not in sanitized:
+        sanitized["type"] = "object"
 
     return sanitized

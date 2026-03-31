@@ -573,6 +573,13 @@ class LLMRouter:
             stage: str,
         ) -> tuple[Any, Dict[str, Any]]:
             try:
+                # DEBUG: log full call_params to help diagnose 400 errors from Anthropic
+                debug_params = {k: v for k, v in call_params.items() if k not in ("api_key",)}
+                logger.debug(
+                    "[litellm-call] stage=%s params=%s",
+                    stage,
+                    json.dumps(debug_params, default=str),
+                )
                 return await litellm.acompletion(**call_params), call_params
             except Exception as call_error:
                 if not (
@@ -649,6 +656,13 @@ class LLMRouter:
                     raise
 
             logger.error(f"LiteLLM error: {e}")
+            # On 400 errors, dump full request params to help diagnose the cause
+            if isinstance(e, litellm.BadRequestError):
+                safe_params = {k: v for k, v in params.items() if k not in ("api_key",)}
+                logger.error(
+                    "[400-debug] full call_params (api_key redacted): %s",
+                    json.dumps(safe_params, default=str),
+                )
             # Preserve error logging
             log_provider_error("litellm.acompletion", params, e, input_request)
             raise
