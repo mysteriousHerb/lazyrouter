@@ -150,7 +150,7 @@ class LLMRouter:
 
     def _build_model_descriptions(
         self,
-        exclude_models: Optional[set] = None,
+        exclude_models: Optional[set[str]] = None,
         allowed_models: Optional[List[str]] = None,
     ) -> str:
         """Build formatted string of model descriptions for routing prompt"""
@@ -239,8 +239,8 @@ class LLMRouter:
 
     async def route(
         self,
-        messages: List[Dict[str, str]],
-        exclude_models: Optional[set] = None,
+        messages: List[Dict[str, Any]],
+        exclude_models: Optional[set[str]] = None,
         allowed_models: Optional[List[str]] = None,
     ) -> RoutingResult:
         """Route the request to the most appropriate model.

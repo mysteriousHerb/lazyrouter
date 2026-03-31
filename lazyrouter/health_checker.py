@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Union
@@ -54,7 +55,9 @@ def _is_gemini_parser_false_negative(error: Exception) -> bool:
     the raw body, which proves the model returned a response.
     """
     msg = str(error)
-    return "GeminiException" in msg and "'candidates'" in msg
+    return "GeminiException" in msg and bool(
+        re.search(r'["\']candidates["\']\s*:', msg)
+    )
 
 
 def _parse_stream_chunk_payload(chunk: Any) -> Optional[Dict[str, Any]]:

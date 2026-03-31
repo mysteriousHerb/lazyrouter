@@ -94,7 +94,7 @@ def test_check_model_health_uses_probe_temperature_one():
 
 
 # ---------------------------------------------------------------------------
-# _wrap_stream guards – LiteLLM MidStreamFallbackError / None stream object
+# _wrap_stream guards - LiteLLM MidStreamFallbackError / None stream object
 # ---------------------------------------------------------------------------
 
 
