@@ -148,7 +148,11 @@ class LLMRouter:
         ) / total_turns
         return model_config.input_price * effective_multiplier
 
-    def _build_model_descriptions(self, exclude_models: Optional[set] = None, allowed_models: Optional[List[str]] = None) -> str:
+    def _build_model_descriptions(
+        self,
+        exclude_models: Optional[set[str]] = None,
+        allowed_models: Optional[List[str]] = None,
+    ) -> str:
         """Build formatted string of model descriptions for routing prompt"""
         descriptions = []
         for model_name, model_config in self.config.llms.items():
@@ -234,7 +238,10 @@ class LLMRouter:
         return status_code == 422 or "422" in str(error)
 
     async def route(
-        self, messages: List[Dict[str, str]], exclude_models: Optional[set] = None, allowed_models: Optional[List[str]] = None
+        self,
+        messages: List[Dict[str, Any]],
+        exclude_models: Optional[set[str]] = None,
+        allowed_models: Optional[List[str]] = None,
     ) -> RoutingResult:
         """Route the request to the most appropriate model.
 
@@ -250,7 +257,8 @@ class LLMRouter:
         available_models = [
             model_name
             for model_name in self.config.llms.keys()
-            if model_name not in excluded_models and (allowed_models is None or model_name in allowed_models)
+            if model_name not in excluded_models
+            and (allowed_models is None or model_name in allowed_models)
         ]
         if not available_models:
             if excluded_models:
@@ -328,8 +336,7 @@ class LLMRouter:
 
         # Build routing prompt with separated current request and context
         model_descriptions = self._build_model_descriptions(
-            exclude_models=excluded_models,
-            allowed_models=allowed_models
+            exclude_models=excluded_models, allowed_models=allowed_models
         )
 
         # Use custom prompt from config if provided, otherwise use default
@@ -659,12 +666,34 @@ class LLMRouter:
         params: Optional[Dict[str, Any]] = None,
         input_request: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[str, None]:
-        """Convert LiteLLM stream to SSE format and log stream-time provider errors."""
+        """Convert LiteLLM stream to SSE format and log stream-time provider errors.
+
+        LiteLLM raises MidStreamFallbackError when its internal Gemini parser
+        crashes (e.g. ``promptTokensDetails: null`` in usageMetadata).  This is
+        a LiteLLM bug — Gemini responded successfully but LiteLLM can't parse
+        the usage metadata.  We catch it here so the error is logged at WARNING
+        (not ERROR) with a clear explanation, and re-raise so server.py's retry /
+        graceful-terminal-chunk logic can handle it normally.
+        """
         try:
             async for chunk in response:
                 chunk_dict = chunk.model_dump(exclude_none=True)
                 yield f"data: {json.dumps(chunk_dict)}\n\n"
             yield "data: [DONE]\n\n"
+        except litellm.exceptions.MidStreamFallbackError as e:
+            logger.warning(
+                "LiteLLM MidStreamFallbackError (known Gemini usage-metadata parsing "
+                "bug — promptTokensDetails=null): %s",
+                str(e)[:280],
+            )
+            if params is not None:
+                log_provider_error(
+                    "litellm.stream.mid_stream_fallback",
+                    params,
+                    e,
+                    input_request,
+                )
+            raise
         except Exception as e:
             logger.error(f"LiteLLM stream error: {e}")
             if params is not None:

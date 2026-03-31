@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Union
@@ -16,7 +17,9 @@ from .models import HealthCheckResult
 logger = logging.getLogger(__name__)
 
 BENCH_PROMPT = [{"role": "user", "content": "[lazyrouter-health-check] Say hi"}]
-BENCH_MAX_TOKENS = 16
+BENCH_MAX_TOKENS = 32
+# 32 tokens avoids MAX_TOKENS finish reason on minimal responses (e.g. "Hi"),
+# which triggers a LiteLLM Gemini parser bug ('NoneType' object is not iterable).
 # Gemini 3 models warn and can misbehave under temp < 1.0. Keep probe temp at 1.0.
 BENCH_TEMPERATURE = 1.0
 HEALTH_CHECK_HEADER = {"X-LazyRouter-Request-Type": "health-check"}
@@ -38,6 +41,23 @@ def _compact_error(error: Exception, limit: int = 240) -> str:
     error_str = str(error).strip()
     text = error_str.splitlines()[0] if error_str else repr(error)
     return text if len(text) <= limit else f"{text[:limit]}..."
+
+
+def _is_gemini_parser_false_negative(error: Exception) -> bool:
+    """Return True when LiteLLM raised a GeminiException because it failed to
+    parse a response whose raw body shows Gemini *did* reply successfully.
+
+    LiteLLM crashes on ``parts: []`` (empty visible content from thinking
+    models) and ``finishReason: MAX_TOKENS`` with minimal content, raising
+    ``APIConnectionError: GeminiException - Received={...}`` even though the
+    model is healthy.  We detect this by checking that the exception message
+    contains both the ``GeminiException`` marker and a ``candidates`` key in
+    the raw body, which proves the model returned a response.
+    """
+    msg = str(error)
+    return "GeminiException" in msg and bool(
+        re.search(r'["\']candidates["\']\s*:', msg)
+    )
 
 
 def _parse_stream_chunk_payload(chunk: Any) -> Optional[Dict[str, Any]]:
@@ -140,10 +160,33 @@ class LiteLLMWrapper:
             return response.model_dump(exclude_none=True)
 
     async def _wrap_stream(self, response) -> AsyncGenerator[str, None]:
-        """Convert LiteLLM stream to SSE format"""
-        async for chunk in response:
-            chunk_dict = chunk.model_dump(exclude_none=True)
-            yield f"data: {json.dumps(chunk_dict)}\n\n"
+        """Convert LiteLLM stream to SSE format.
+
+        LiteLLM can raise MidStreamFallbackError and return None (or a
+        non-iterable) as the stream object when its internal router
+        exhausts all fallbacks mid-stream.  Guard against that here so
+        the caller receives a proper async generator that raises instead
+        of an unguarded ``async for`` that would raise the confusing
+        ``'NoneType' object is not iterable`` TypeError.
+        """
+        if response is None:
+            raise litellm.ServiceUnavailableError(
+                message="LiteLLM returned None as the stream response",
+                model="unknown",
+                llm_provider="unknown",
+            )
+        try:
+            async for chunk in response:
+                chunk_dict = chunk.model_dump(exclude_none=True)
+                yield f"data: {json.dumps(chunk_dict)}\n\n"
+        except (TypeError, AttributeError) as exc:
+            # Raised when the underlying iterator is None or not async-iterable,
+            # e.g. after a LiteLLM MidStreamFallbackError swallows the real stream.
+            raise litellm.ServiceUnavailableError(
+                message=f"Stream iteration failed (LiteLLM mid-stream fallback?): {exc}",
+                model="unknown",
+                llm_provider="unknown",
+            ) from exc
         yield "data: [DONE]\n\n"
 
 
@@ -234,6 +277,29 @@ async def check_model_health(
                 total_ms=total_ms,
             )
         except Exception as fallback_error:
+            # LiteLLM raises GeminiException even when Gemini responded —
+            # it just fails to parse responses with empty parts[] or
+            # MAX_TOKENS on a short reply (thinking models).  If the raw
+            # error body contains a valid Gemini response, treat as healthy.
+            if _is_gemini_parser_false_negative(fallback_error):
+                total_ms = round((time.monotonic() - t0) * 1000, 1)
+                logger.debug(
+                    "Health-check non-stream probe raised GeminiException but "
+                    "raw body contains a valid response; treating model=%s as healthy",
+                    name,
+                )
+                return HealthCheckResult(
+                    model=name,
+                    provider=provider_name,
+                    actual_model=actual_model,
+                    is_router=is_router,
+                    status="ok",
+                    is_healthy=None,
+                    ttft_ms=None,
+                    ttft_source=ttft_source,
+                    ttft_unavailable_reason=ttft_unavailable_reason,
+                    total_ms=total_ms,
+                )
             return HealthCheckResult(
                 model=name,
                 provider=provider_name,
