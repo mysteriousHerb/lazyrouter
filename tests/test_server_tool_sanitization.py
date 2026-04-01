@@ -158,7 +158,7 @@ def test_gemini_message_sanitizer_strips_thought_suffix_and_normalizes_tool_mess
     assert "thinking_blocks" not in out[1]
 
 
-def test_gemini_message_sanitizer_uses_clean_tool_result_header_when_ids_missing():
+def test_gemini_message_sanitizer_preserves_tool_messages_when_ids_missing():
     messages = [
         {
             "role": "tool",
