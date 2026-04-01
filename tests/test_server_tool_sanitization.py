@@ -153,11 +153,12 @@ def test_gemini_message_sanitizer_strips_thought_suffix_and_normalizes_tool_mess
     assert out[0]["tool_calls"][0]["id"] == "call_123"
     assert out[0]["tool_calls"][0]["function"]["arguments"] == '{"path": "README.md"}'
     assert "reasoning_content" not in out[0]
-    assert out[1]["role"] == "user"
-    assert out[1]["content"].startswith("[tool_result name=read id=call_123]")
+    assert out[1]["role"] == "tool"
+    assert out[1]["tool_call_id"] == "call_123"
+    assert "thinking_blocks" not in out[1]
 
 
-def test_gemini_message_sanitizer_uses_clean_tool_result_header_when_ids_missing():
+def test_gemini_message_sanitizer_preserves_tool_messages_when_ids_missing():
     messages = [
         {
             "role": "tool",
@@ -166,5 +167,49 @@ def test_gemini_message_sanitizer_uses_clean_tool_result_header_when_ids_missing
     ]
 
     out = sanitize_messages_for_gemini(messages)
+    assert out[0]["role"] == "tool"
+    assert out[0]["content"] == "result payload"
+
+
+def test_gemini_message_sanitizer_preserves_tool_role_in_multi_turn_sequence():
+    """Multi-turn tool call sequences must keep tool role for LiteLLM to convert
+    to Gemini function_response format."""
+    messages = [
+        {"role": "user", "content": "What's the weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "name": "get_weather", "content": "Sunny"},
+        {"role": "user", "content": "Now check the news"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_2",
+                    "type": "function",
+                    "function": {"name": "get_news", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_2", "name": "get_news", "content": "Headlines"},
+    ]
+
+    out = sanitize_messages_for_gemini(messages)
+
     assert out[0]["role"] == "user"
-    assert out[0]["content"] == "[tool_result]\nresult payload"
+    assert out[1]["role"] == "assistant"
+    assert out[2]["role"] == "tool"
+    assert out[2]["tool_call_id"] == "call_1"
+    assert out[3]["role"] == "user"
+    assert out[4]["role"] == "assistant"
+    assert out[5]["role"] == "tool"
+    assert out[5]["tool_call_id"] == "call_2"

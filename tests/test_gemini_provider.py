@@ -63,5 +63,5 @@ def test_gemini_message_sanitization_flattens_tool_role_and_strips_thought_id():
     sanitized = sanitize_messages_for_gemini(messages)
     assert sanitized[0]["tool_calls"][0]["id"] == "call_abc"
     assert sanitized[0]["tool_calls"][0]["function"]["arguments"] == '{"q": "hi"}'
-    assert sanitized[1]["role"] == "user"
-    assert sanitized[1]["content"].startswith("[tool_result name=search id=call_abc]")
+    assert sanitized[1]["role"] == "tool"
+    assert sanitized[1]["tool_call_id"] == "call_abc"

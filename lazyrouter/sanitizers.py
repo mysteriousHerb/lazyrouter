@@ -162,23 +162,12 @@ def sanitize_messages_for_gemini(
                 msg["content"] = content_to_text(msg.get("content"))
 
         elif role == "tool":
-            # Some Gemini-compatible upstreams reject `tool` role and only accept
-            # `user`/`model`. Flatten tool results into a user text turn.
-            tool_name = str(msg.get("name", "")).strip()
-            tool_id = strip_gemini_thought_suffix(msg.get("tool_call_id"))
-            tool_content = content_to_text(msg.get("content"))
-            header_bits = []
-            if tool_name:
-                header_bits.append(f"name={tool_name}")
-            if tool_id:
-                header_bits.append(f"id={tool_id}")
-            header = (
-                f"[tool_result{' ' + ' '.join(header_bits) if header_bits else ''}]"
-            )
-            msg = {
-                "role": "user",
-                "content": f"{header}\n{tool_content}".strip(),
-            }
+            # Keep tool role intact so LiteLLM can convert to Gemini
+            # function_response. Only strip thought suffixes from tool_call_id.
+            if "tool_call_id" in msg and msg.get("tool_call_id") is not None:
+                msg["tool_call_id"] = strip_gemini_thought_suffix(msg.get("tool_call_id"))
+            if isinstance(msg.get("content"), list):
+                msg["content"] = content_to_text(msg.get("content"))
 
         elif role in INSTRUCTION_ROLES:
             msg["role"] = "system"

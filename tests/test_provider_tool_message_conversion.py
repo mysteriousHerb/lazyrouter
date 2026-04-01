@@ -67,5 +67,5 @@ def test_gemini_message_conversion_flattens_tool_results():
     out = sanitize_messages_for_gemini(messages)
     assert out[0]["role"] == "system"
     assert out[1]["tool_calls"][0]["id"] == "call_1"
-    assert out[2]["role"] == "user"
-    assert "[tool_result name=lookup id=call_1]" in out[2]["content"]
+    assert out[2]["role"] == "tool"
+    assert out[2]["tool_call_id"] == "call_1"
