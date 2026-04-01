@@ -164,9 +164,8 @@ def sanitize_messages_for_gemini(
         elif role == "tool":
             # Keep tool role intact so LiteLLM can convert to Gemini
             # function_response. Only strip thought suffixes from tool_call_id.
-            tool_call_id = msg.get("tool_call_id")
-            if tool_call_id:
-                msg["tool_call_id"] = strip_gemini_thought_suffix(tool_call_id)
+            if "tool_call_id" in msg and msg.get("tool_call_id") is not None:
+                msg["tool_call_id"] = strip_gemini_thought_suffix(msg.get("tool_call_id"))
             if isinstance(msg.get("content"), list):
                 msg["content"] = content_to_text(msg.get("content"))
 
