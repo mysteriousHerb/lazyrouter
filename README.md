@@ -43,10 +43,10 @@ It also helps translate behavior across API styles (OpenAI, Gemini, and Anthropi
 2. Start LazyRouter directly from GitHub:
 
 ```bash
-uvx --from git+https://github.com/mysteriousHerb/lazyrouter.git lazyrouter --config config.yaml
+uvx --from git+https://github.com/mysteriousHerb/lazyrouter.git lazyrouter
 ```
 
-If `config.yaml` does not exist yet, LazyRouter now starts a setup UI instead of failing. Open the printed `/admin/config` URL, paste/edit your `config.yaml` and `.env`, save, then use the restart button to apply the config.
+LazyRouter now starts a setup UI instead of failing. Open the printed `/admin/config` URL, paste/edit your `config.yaml` and `.env`, save, then use the restart button to apply the config.
 
 You do not need to manually prepare `config.yaml` or `.env` first anymore. The setup UI can create both files for you on first run.
 
