@@ -477,7 +477,8 @@ class HealthChecker:
                     )
                     logger.warning(f"Health check: {name} unhealthy - {reason}")
             else:
-                err = "Timed out" if isinstance(r, asyncio.TimeoutError) else str(r)
+                timeout_s = self.hc_config.max_latency_ms / 1000 + 5
+                err = f"Timed out after {timeout_s:.1f}s (max_latency_ms={self.hc_config.max_latency_ms})" if isinstance(r, asyncio.TimeoutError) else str(r)
                 mc = self.config.llms[name]
                 result = HealthCheckResult(
                     model=name,
@@ -548,8 +549,9 @@ class HealthChecker:
                 )
                 logger.warning(f"Health check: router model unhealthy - {reason}")
         else:
+            timeout_s = self.hc_config.max_latency_ms / 1000 + 5
             err = (
-                "Timed out"
+                f"Timed out after {timeout_s:.1f}s (max_latency_ms={self.hc_config.max_latency_ms})"
                 if isinstance(raw_router_result, asyncio.TimeoutError)
                 else str(raw_router_result)
             )
