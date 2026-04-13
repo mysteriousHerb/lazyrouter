@@ -396,6 +396,7 @@ class HealthChecker:
         router_provider_name = self.config.router.provider
         router_model = self.config.router.model
         router_probe_source_model_name: Optional[str] = None
+        probe_timeout_s = self.hc_config.max_latency_ms / 1000 + 5  # generous timeout
 
         for model_name, model_config in self.config.llms.items():
             if (
@@ -418,8 +419,7 @@ class HealthChecker:
                     check_model_health(
                         model_name, provider, model_config.model, model_config.provider
                     ),
-                    timeout=self.hc_config.max_latency_ms / 1000
-                    + 5,  # generous timeout
+                    timeout=probe_timeout_s,  # generous timeout
                 )
             )
 
@@ -439,7 +439,7 @@ class HealthChecker:
                     router_provider_name,
                     is_router=True,
                 ),
-                timeout=self.hc_config.max_latency_ms / 1000 + 5,  # generous timeout
+                timeout=probe_timeout_s,  # generous timeout
             )
 
         if router_task is None:
@@ -477,7 +477,13 @@ class HealthChecker:
                     )
                     logger.warning(f"Health check: {name} unhealthy - {reason}")
             else:
-                err = "Timed out" if isinstance(r, asyncio.TimeoutError) else str(r)
+                if isinstance(r, asyncio.TimeoutError):
+                    err = (
+                        f"Timed out after {probe_timeout_s:.1f}s"
+                        f" (max_latency_ms={self.hc_config.max_latency_ms})"
+                    )
+                else:
+                    err = str(r)
                 mc = self.config.llms[name]
                 result = HealthCheckResult(
                     model=name,
@@ -548,11 +554,13 @@ class HealthChecker:
                 )
                 logger.warning(f"Health check: router model unhealthy - {reason}")
         else:
-            err = (
-                "Timed out"
-                if isinstance(raw_router_result, asyncio.TimeoutError)
-                else str(raw_router_result)
-            )
+            if isinstance(raw_router_result, asyncio.TimeoutError):
+                err = (
+                    f"Timed out after {probe_timeout_s:.1f}s"
+                    f" (max_latency_ms={self.hc_config.max_latency_ms})"
+                )
+            else:
+                err = str(raw_router_result)
             router_result = HealthCheckResult(
                 model=router_model,
                 provider=router_provider_name,
